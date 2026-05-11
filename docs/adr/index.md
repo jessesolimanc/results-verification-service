@@ -1,0 +1,15 @@
+# ADR index
+
+Architecture Decision Records for the results verification service.
+
+| ADR | Title | Status |
+|---|---|---|
+| [ADR-001](ADR-001-manifest-as-contract.md) | Run context manifest as the system contract | Accepted |
+| [ADR-002](ADR-002-experiment-per-feature.md) | One experiment per feature set | Accepted |
+| [ADR-003](ADR-003-test-classification.md) | Stability vs exploratory experiment classification | Accepted |
+| [ADR-004](ADR-004-polling-listener.md) | Polling over event subscription for the listener | Accepted |
+| [ADR-005](ADR-005-pre-verification-gate.md) | Pre-verification gate with abort-on-failure | Accepted |
+| [ADR-006](ADR-006-sqlite.md) | SQLite for the verification database | Accepted |
+| [ADR-007](ADR-007-immutable-snapshots.md) | Immutable result snapshots — no backpropagation | Accepted |
+| [ADR-008](ADR-008-gold-standard-versioning.md) | Experiment-level gold standard versioning | Accepted |
+| [ADR-009](ADR-009-release-as-snapshot.md) | Gold standard release as optional convenience snapshot | Accepted |
