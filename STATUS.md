@@ -2,7 +2,7 @@
 
 Quick reference for current implementation state. Update this file at the end of every development session.
 
-Last updated: 2026-05-12
+Last updated: 2026-05-12 (session 2)
 Current phase: Phase 1 — Foundation
 
 ---
@@ -13,7 +13,7 @@ Current phase: Phase 1 — Foundation
 | File | Function | Status | Notes |
 |---|---|---|---|
 | `db.py` | `get_connection()` | ✅ Done | |
-| `db.py` | `initialise_database()` | ✅ Done | |
+| `db.py` | `initialise_database()` | ✅ Done | Wired to `--init` in main.py |
 | `models.py` | `insert_gs_exp_version()` | ⬜ Not started | |
 | `models.py` | `insert_gs_sample()` | ⬜ Not started | |
 | `models.py` | `get_active_gs_version()` | ⬜ Not started | |
@@ -109,6 +109,7 @@ Current phase: Phase 1 — Foundation
 - [x] Project structure and skeleton
 - [x] Virtual environment and dependencies
 - [x] Database initialisation
+- [x] database-schema.md updated to match current DDL
 - [ ] Gold standard registration tool
 - [ ] models.py insert functions
 

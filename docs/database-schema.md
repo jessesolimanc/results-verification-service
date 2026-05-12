@@ -10,7 +10,7 @@ The schema DDL lives at: `schema/verification_schema.sql`
 
 ## Design principles
 
-**Records are immutable snapshots.** Once a run is written, it is never modified. `expected_value` in `sample_results` is denormalised from the gold standard and frozen at the time of the run — it is never backfilled if the gold standard is later updated.
+**Records are immutable snapshots.** Once a run is written, it is never modified. `expected_value` and `full_expected_metrics` in `sample_results` are denormalised from the gold standard and frozen at the time of the run — they are never backfilled if the gold standard is later updated.
 
 **Gold standard versions are never deleted.** When a gold standard is updated, the old version is retired by setting `superseded_at`. The full history of what was expected at every point in time is always intact.
 
@@ -45,7 +45,9 @@ One row per sample per gold standard experiment version. This is where the actua
 | `gs_sample_id` | TEXT PK | Surrogate UUID |
 | `gs_exp_version_id` | TEXT FK | References `gold_standard_exp_versions` |
 | `sample_id` | TEXT | Natural sample id e.g. `"2DU008_01"`. Repeats across versions. |
-| `expected_value` | REAL | The gold standard expected count or metric value. |
+| `primary_metric` | TEXT | *(MVP scaffolding)* Name of the metric being compared e.g. `"count"`. Provides a simple single-value path through the pipeline so all machinery can be built before the JSON comparison design is finalised. |
+| `primary_metric_value` | REAL | *(MVP scaffolding)* The gold standard value for the primary metric. |
+| `full_metrics` | TEXT | JSON blob containing all metric columns from the gold standard CSV. |
 | `notes` | TEXT | Optional annotation. |
 
 ---
@@ -113,9 +115,12 @@ One row per sample per experiment result.
 | `result_id` | TEXT FK | References `experiment_results` |
 | `gs_sample_id` | TEXT FK | The exact gold standard sample this was compared against. |
 | `sample_id` | TEXT | Denormalised for convenient querying. |
-| `actual_value` | REAL | The pipeline output value for this sample. |
-| `expected_value` | REAL | Snapshot of the gold standard value at time of run. Never backfilled. |
-| `deviation_percent` | REAL | `abs(actual - expected) / expected * 100` |
+| `primary_metric` | TEXT | *(MVP scaffolding)* Name of the metric compared. Mirrors `gold_standard_samples.primary_metric`. |
+| `actual_value` | REAL | *(MVP scaffolding)* The pipeline output value for the primary metric. |
+| `expected_value` | REAL | *(MVP scaffolding)* Snapshot of the primary metric gold standard value at time of run. Never backfilled. |
+| `deviation_percent` | REAL | *(MVP scaffolding)* `abs(actual - expected) / expected * 100` |
+| `full_actual_metrics` | TEXT | JSON blob of all actual metric values produced by the pipeline for this sample. |
+| `full_expected_metrics` | TEXT | JSON blob snapshot of all gold standard metric values at time of run. Never backfilled. |
 | `verdict` | TEXT | `"pass"` \| `"fail"` |
 
 ---
