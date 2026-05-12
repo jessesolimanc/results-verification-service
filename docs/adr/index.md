@@ -13,3 +13,5 @@ Architecture Decision Records for the results verification service.
 | [ADR-007](ADR-007-immutable-snapshots.md) | Immutable result snapshots — no backpropagation | Accepted |
 | [ADR-008](ADR-008-gold-standard-versioning.md) | Experiment-level gold standard versioning | Accepted |
 | [ADR-009](ADR-009-release-as-snapshot.md) | Gold standard release as optional convenience snapshot | Accepted |
+| [ADR-010](ADR-010-hybrid-workflow.md) | Hybrid planning and implementation workflow | Accepted |
+| [ADR-011](ADR-011-json-blob-metrics.md) | JSON blob storage for sample metrics | Accepted |

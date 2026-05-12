@@ -1,0 +1,27 @@
+# ---------------------------------------------------------------
+# Results Verification Service — configuration
+#
+# Copy this file to config/local_config.yaml and update paths
+# for your machine. local_config.yaml is gitignored.
+# ---------------------------------------------------------------
+
+paths:
+  manifests_dir:      "C:/RegressionTesting/manifests"
+  gold_standards_dir: "C:/RegressionTesting/gold_standards"
+  workbooks_dir:      "C:/RegressionTesting/workbooks"
+  database:           "C:/RegressionTesting/verification.db"
+
+pipeline:
+  # Connection string for the central pipeline database
+  database_connection: ""
+  # How often to poll for completed runs (seconds)
+  polling_interval_seconds: 30
+
+verification:
+  # Default tolerance used when no experiment-specific tolerance is set
+  default_tolerance_percent: 10.0
+
+llm:
+  # Anthropic model to use for report generation
+  model: "claude-sonnet-4-20250514"
+  max_tokens: 1000

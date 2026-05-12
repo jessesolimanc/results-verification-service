@@ -31,11 +31,14 @@ CREATE TABLE IF NOT EXISTS gold_standard_exp_versions (
 );
 
 CREATE TABLE IF NOT EXISTS gold_standard_samples (
-    gs_sample_id        TEXT        PRIMARY KEY,
-    gs_exp_version_id   TEXT        NOT NULL REFERENCES gold_standard_exp_versions (gs_exp_version_id),
-    sample_id           TEXT        NOT NULL,       -- natural id e.g. "2DU008_01"
-    expected_value      REAL        NOT NULL,       -- the gold standard count or metric value
-    notes               TEXT        DEFAULT NULL    -- optional annotation per sample
+    gs_sample_id            TEXT    PRIMARY KEY,
+    gs_exp_version_id       TEXT    NOT NULL 
+        REFERENCES gold_standard_exp_versions (gs_exp_version_id),
+    sample_id               TEXT    NOT NULL,
+    primary_metric          TEXT    NOT NULL,   -- scaffolding for MVP
+    primary_metric_value    REAL    NOT NULL,   -- scaffolding for MVP
+    full_metrics            TEXT    NOT NULL,   -- JSON blob, all columns
+    notes                   TEXT    DEFAULT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_gs_samples_version
@@ -121,14 +124,19 @@ CREATE INDEX IF NOT EXISTS idx_exp_results_experiment
 -- -------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS sample_results (
-    sample_result_id    TEXT        PRIMARY KEY,
-    result_id           TEXT        NOT NULL REFERENCES experiment_results (result_id),
-    gs_sample_id        TEXT        NOT NULL REFERENCES gold_standard_samples (gs_sample_id),
-    sample_id           TEXT        NOT NULL,       -- denormalised for convenient querying
-    actual_value        REAL        NOT NULL,
-    expected_value      REAL        NOT NULL,       -- snapshot at time of run — never backfilled
-    deviation_percent   REAL        NOT NULL,
-    verdict             TEXT        NOT NULL        -- "pass" | "fail"
+    sample_result_id        TEXT    PRIMARY KEY,
+    result_id               TEXT    NOT NULL 
+        REFERENCES experiment_results (result_id),
+    gs_sample_id            TEXT    NOT NULL 
+        REFERENCES gold_standard_samples (gs_sample_id),
+    sample_id               TEXT    NOT NULL,
+    primary_metric          TEXT    NOT NULL,   -- scaffolding for MVP
+    actual_value            REAL    NOT NULL,   -- scaffolding for MVP
+    expected_value          REAL    NOT NULL,   -- scaffolding for MVP
+    deviation_percent       REAL    NOT NULL,   -- scaffolding for MVP
+    full_actual_metrics     TEXT    NOT NULL,   -- JSON blob
+    full_expected_metrics   TEXT    NOT NULL,   -- JSON blob, snapshot
+    verdict                 TEXT    NOT NULL
         CHECK (verdict IN ('pass', 'fail'))
 );
 
