@@ -32,7 +32,7 @@ def init(config: dict) -> None:
     """Initialise the SQLite database from the schema DDL."""
     db_path = config["paths"]["database"]
     schema_path = Path(__file__).parent.parent / "schema" / "verification_schema.sql"
-    print("Initialising database...", db_path, schema_path)
+    print("Initialising database...")
     initialise_database(db_path, str(schema_path))
     print("Done.")
 
