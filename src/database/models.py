@@ -12,26 +12,57 @@ goes through functions defined here.
 
 def insert_gs_exp_version(conn, record: dict) -> str:
     """Insert a new gold standard experiment version. Returns gs_exp_version_id."""
-    # TODO: implement
-    pass
+    conn.execute(
+        """
+        INSERT INTO gold_standard_exp_versions
+            (gs_exp_version_id, experiment_id, version_number, checksum_hash,
+             file_path, registered_at, registered_by, reason, superseded_at)
+        VALUES
+            (:gs_exp_version_id, :experiment_id, :version_number, :checksum_hash,
+             :file_path, :registered_at, :registered_by, :reason, :superseded_at)
+        """,
+        record,
+    )
+    return record["gs_exp_version_id"]
 
 
 def insert_gs_sample(conn, record: dict) -> None:
     """Insert a single gold standard sample expected value."""
-    # TODO: implement
-    pass
+    conn.execute(
+        """
+        INSERT INTO gold_standard_samples
+            (gs_sample_id, gs_exp_version_id, sample_id, primary_metric,
+             primary_metric_value, full_metrics, notes)
+        VALUES
+            (:gs_sample_id, :gs_exp_version_id, :sample_id, :primary_metric,
+             :primary_metric_value, :full_metrics, :notes)
+        """,
+        record,
+    )
 
 
 def get_active_gs_version(conn, experiment_id: str) -> dict | None:
     """Return the currently active gold standard version for an experiment."""
-    # TODO: implement
-    pass
+    row = conn.execute(
+        """
+        SELECT * FROM gold_standard_exp_versions
+        WHERE experiment_id = ? AND superseded_at IS NULL
+        """,
+        (experiment_id,),
+    ).fetchone()
+    return dict(row) if row else None
 
 
 def retire_gs_version(conn, gs_exp_version_id: str, superseded_at: str) -> None:
     """Set superseded_at on an existing gold standard version."""
-    # TODO: implement
-    pass
+    conn.execute(
+        """
+        UPDATE gold_standard_exp_versions
+        SET superseded_at = ?
+        WHERE gs_exp_version_id = ?
+        """,
+        (superseded_at, gs_exp_version_id),
+    )
 
 
 # ---------------------------------------------------------------

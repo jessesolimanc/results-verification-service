@@ -2,7 +2,7 @@
 
 Quick reference for current implementation state. Update this file at the end of every development session.
 
-Last updated: 2026-05-12 (session 2)
+Last updated: 2026-05-13 (session 3)
 Current phase: Phase 1 — Foundation
 
 ---
@@ -14,10 +14,10 @@ Current phase: Phase 1 — Foundation
 |---|---|---|---|
 | `db.py` | `get_connection()` | ✅ Done | |
 | `db.py` | `initialise_database()` | ✅ Done | Wired to `--init` in main.py |
-| `models.py` | `insert_gs_exp_version()` | ⬜ Not started | |
-| `models.py` | `insert_gs_sample()` | ⬜ Not started | |
-| `models.py` | `get_active_gs_version()` | ⬜ Not started | |
-| `models.py` | `retire_gs_version()` | ⬜ Not started | |
+| `models.py` | `insert_gs_exp_version()` | ✅ Done | |
+| `models.py` | `insert_gs_sample()` | ✅ Done | |
+| `models.py` | `get_active_gs_version()` | ✅ Done | |
+| `models.py` | `retire_gs_version()` | ✅ Done | |
 | `models.py` | `insert_run()` | ⬜ Not started | |
 | `models.py` | `get_unprocessed_runs()` | ⬜ Not started | |
 | `models.py` | `insert_experiment_result()` | ⬜ Not started | |
@@ -27,9 +27,9 @@ Current phase: Phase 1 — Foundation
 ### `src/registration/`
 | File | Function | Status | Notes |
 |---|---|---|---|
-| `registrar.py` | `compute_checksum()` | ⬜ Not started | |
-| `registrar.py` | `read_gold_standard_csv()` | ⬜ Not started | |
-| `registrar.py` | `register_gold_standard()` | ⬜ Not started | |
+| `registrar.py` | `compute_checksum()` | ✅ Done | |
+| `registrar.py` | `read_gold_standard_csv()` | ✅ Done | Skips 4 metadata rows; wide-format only |
+| `registrar.py` | `register_gold_standard()` | ✅ Done | Atomic transaction; retires previous version if exists |
 
 ### `src/listener/`
 | File | Function | Status | Notes |
@@ -74,7 +74,7 @@ Current phase: Phase 1 — Foundation
 |---|---|---|
 | `load_config()` | ✅ Done | |
 | `init()` | ✅ Done | |
-| `register()` | ⬜ Not started | |
+| `register()` | ✅ Done | |
 | `run()` | ⬜ Not started | |
 
 ---
@@ -111,8 +111,8 @@ Current phase: Phase 1 — Foundation
 - [x] Virtual environment and dependencies
 - [x] Database initialisation
 - [x] database-schema.md updated to match current DDL
-- [ ] Gold standard registration tool
-- [ ] models.py insert functions
+- [x] Gold standard registration tool
+- [x] models.py gold standard insert functions
 
 ### Phase 2 — Happy path end to end
 - [ ] Listener (polling loop)
