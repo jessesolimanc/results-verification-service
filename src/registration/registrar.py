@@ -6,6 +6,10 @@ inserts a new version into gold_standard_exp_versions, and
 inserts one row per sample into gold_standard_samples.
 
 Entry point: register_gold_standard()
+
+# NOTE: Currently handles wide-format CSVs only (4 metadata rows,
+# one row per sample). Long/melted format CSVs (e.g. RnDdata) 
+# require a pivot preprocessing step — see STATUS.md.
 """
 
 import hashlib

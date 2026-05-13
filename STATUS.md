@@ -99,7 +99,8 @@ Current phase: Phase 1 — Foundation
 | Dynamic range experiment — may need curve metric not per-sample tolerance | 🔲 Unresolved |
 | 10-channel experiment — per-channel criteria TBD | 🔲 Unresolved |
 | Image paths for all 5 experiments — pending image transfer to regression machine | 🔲 Unresolved |
-| Primary metric column name per experiment type — how does registrar know which column to use? | 🔲 Unresolved |
+| Primary metric column name per experiment type — how does registrar know which column to use? | ✅ Resolved - Answer: Hardcoded as UM-01_CountsPer50ul for the MVP. This is scaffolding only — will be removed when full JSON blob comparison is implemented. No manifest field needed. |
+| RnDdata CSV uses long/melted format — needs pivot preprocessing before registration. No 4-row metadata header. Not needed for MVP.  | 🔲 Future |
 
 ---
 
