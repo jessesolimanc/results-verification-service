@@ -6,10 +6,10 @@
 # ---------------------------------------------------------------
 
 paths:
-  manifests_dir:      "C:/RegressionTesting/manifests"
-  gold_standards_dir: "C:/RegressionTesting/gold_standards"
-  workbooks_dir:      "C:/RegressionTesting/workbooks"
-  database:           "C:/RegressionTesting/verification.db"
+  manifests_dir:      "F:/RegressionTesting/manifests"
+  gold_standards_dir: "F:/RegressionTesting/gold_standards"
+  workbooks_dir:      "F:/RegressionTesting/workbooks"
+  database:           "F:/RegressionTesting/verification.db"
 
 pipeline:
   # Connection string for the central pipeline database

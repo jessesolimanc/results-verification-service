@@ -8,39 +8,106 @@ inserts one row per sample into gold_standard_samples.
 Entry point: register_gold_standard()
 
 # NOTE: Currently handles wide-format CSVs only (4 metadata rows,
-# one row per sample). Long/melted format CSVs (e.g. RnDdata) 
+# one row per sample). Long/melted format CSVs (e.g. RnDdata)
 # require a pivot preprocessing step — see STATUS.md.
 """
 
-import hashlib
 import csv
-from pathlib import Path
+import hashlib
+import json
+import uuid
+from datetime import datetime, timezone
+
+from database.models import (
+    get_active_gs_version,
+    insert_gs_exp_version,
+    insert_gs_sample,
+    retire_gs_version,
+)
+
+# MVP scaffolding — update when confirmed against actual CSVs
+PRIMARY_METRIC = "UM-01_CountsPer50ul"
+SAMPLE_ID_COLUMN = "SampleID"
+METADATA_ROWS = 4
 
 
 def compute_checksum(file_path: str) -> str:
     """Compute and return the SHA-256 hash of a file."""
-    # TODO: implement
-    pass
+    h = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def read_gold_standard_csv(file_path: str) -> list[dict]:
     """Read a gold standard CSV and return a list of sample dicts."""
-    # TODO: implement
-    pass
+    with open(file_path, newline="", encoding="utf-8-sig") as f:
+        for _ in range(METADATA_ROWS):
+            f.readline()
+        return list(csv.DictReader(f))
 
 
 def register_gold_standard(conn, experiment_id: str, file_path: str,
                             registered_by: str, reason: str) -> str:
     """
     Full registration flow for a gold standard experiment version.
-    
+
     1. Compute checksum
     2. Read samples from CSV
     3. Retire current active version if one exists
     4. Insert new gs_exp_version record
     5. Insert gs_sample records
-    
+
     Returns the new gs_exp_version_id.
+    
+    NOTE:   Handles wide-format CSVs only (4 metadata rows, one row
+            per sample). Long/melted format CSVs (e.g. RnDdata) 
+            require pivot preprocessing — see STATUS.md.
     """
-    # TODO: implement
-    pass
+    checksum = compute_checksum(file_path)
+    rows = read_gold_standard_csv(file_path)
+    now = datetime.now(timezone.utc).isoformat()
+
+    active = get_active_gs_version(conn, experiment_id)
+    next_version = (active["version_number"] + 1) if active else 1
+    gs_exp_version_id = str(uuid.uuid4())
+
+    version_record = {
+        "gs_exp_version_id": gs_exp_version_id,
+        "experiment_id":     experiment_id,
+        "version_number":    next_version,
+        "checksum_hash":     checksum,
+        "file_path":         str(file_path),
+        "registered_at":     now,
+        "registered_by":     registered_by,
+        "reason":            reason,
+        "superseded_at":     None,
+    }
+
+    sample_records = [
+        {
+            "gs_sample_id":         str(uuid.uuid4()),
+            "gs_exp_version_id":    gs_exp_version_id,
+            "sample_id":            row[SAMPLE_ID_COLUMN],
+            "primary_metric":       PRIMARY_METRIC,
+            "primary_metric_value": float(row[PRIMARY_METRIC]),
+            "full_metrics":         json.dumps(dict(row)),
+            "notes":                None,
+        }
+        for row in rows
+    ]
+
+    try:
+        with conn:
+            if active:
+                retire_gs_version(conn, active["gs_exp_version_id"], now)
+            insert_gs_exp_version(conn, version_record)
+            for record in sample_records:
+                insert_gs_sample(conn, record)
+    except Exception as e:
+        raise RuntimeError(
+            f"Registration failed for experiment '{experiment_id}': {e}"
+        ) from e
+
+    return gs_exp_version_id

@@ -20,6 +20,7 @@ def get_connection(db_path: str) -> sqlite3.Connection:
 
 def initialise_database(db_path: str, schema_path: str) -> None:
     """Create all tables from the schema DDL if they don't exist."""
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     ddl = Path(schema_path).read_text()
     conn = get_connection(db_path)
     conn.executescript(ddl)

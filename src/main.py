@@ -11,7 +11,11 @@ import argparse
 import yaml
 from pathlib import Path
 
-from database.db import initialise_database
+from database.db import (
+    initialise_database,
+    get_connection
+)
+from registration.registrar import register_gold_standard
 
 
 def load_config() -> dict:
@@ -35,9 +39,32 @@ def init(config: dict) -> None:
 
 def register(config: dict) -> None:
     """Run the interactive gold standard registration tool."""
-    # TODO: implement registration flow
     print("Starting registration tool...")
+    experiment_id = input("Experiment ID: ")
 
+    while True:
+        gold_standard_csv_path = input("Gold standard CSV path: ")
+        path = Path(gold_standard_csv_path)
+        if not path.exists():
+            print(f"Error: file not found at {gold_standard_csv_path}")
+        elif path.suffix.lower() != ".csv":
+            print(f"Error: expected a .csv file, got '{path.suffix}'")
+        else:
+            break
+
+    registered_by = input("Registered by: ")
+    reason = input("Reason: ")
+
+    try:
+        with get_connection(config["paths"]["database"]) as conn:
+            new_gs_exp_version_id = register_gold_standard(conn, experiment_id,
+                                                        gold_standard_csv_path,
+                                                        registered_by, reason)
+            print("Registered new gold standard version:", new_gs_exp_version_id)
+    except Exception as e:
+        print(f"Registration failed: {e}")
+        return
+    
 
 def run(config: dict) -> None:
     """Start the verification service listener loop."""
