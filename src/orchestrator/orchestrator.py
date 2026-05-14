@@ -17,10 +17,21 @@ import json
 from pathlib import Path
 
 
-def load_manifest(manifest_path: str) -> dict:
-    """Load and return a run context manifest from disk."""
-    with open(manifest_path) as f:
+def load_manifest(run_id: str, config: dict) -> dict:
+    """Load and return the context manifest for a run."""
+    path = Path(config["paths"]["manifests_dir"]) / f"context_manifest_{run_id}.json"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Manifest not found for run '{run_id}': expected at {path}"
+        )
+    with open(path) as f:
         return json.load(f)
+
+
+def find_result_folder(run_id: str, exp_id: str, config: dict) -> Path:
+    """Locate the result folder for an experiment within a run."""
+    # TODO: implement — glob for {exp_id}_{run_id}_* under workbooks_dir
+    pass
 
 
 def verify_run(config: dict, conn, run: dict) -> None:

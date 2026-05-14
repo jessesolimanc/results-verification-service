@@ -6,7 +6,7 @@
 # ---------------------------------------------------------------
 
 paths:
-  manifests_dir:      "F:/RegressionTesting/manifests"
+  manifests_dir:      "F:/RegressionTesting/manifests"  # files named: context_manifest_{run_id}.json
   gold_standards_dir: "F:/RegressionTesting/gold_standards"
   workbooks_dir:      "F:/RegressionTesting/workbooks"
   database:           "F:/RegressionTesting/verification.db"
@@ -16,6 +16,10 @@ pipeline:
   database_connection: ""
   # How often to poll for completed runs (seconds)
   polling_interval_seconds: 30
+
+listener:
+  # Set to true to use the mock listener (no pipeline DB required)
+  use_mock: true
 
 verification:
   # Default tolerance used when no experiment-specific tolerance is set
