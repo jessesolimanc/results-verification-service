@@ -21,6 +21,10 @@ listener:
   # Set to true to use the mock listener (no pipeline DB required)
   use_mock: true
 
+# Manifest schema note:
+# experiment entries use "comparisons" list (ADR-016), NOT "sample_tolerances"
+# e.g. "comparisons": [{"type": "count_tolerance", "tolerance_percent": 10.0}]
+
 verification:
   # Default tolerance used when no experiment-specific tolerance is set
   default_tolerance_percent: 10.0

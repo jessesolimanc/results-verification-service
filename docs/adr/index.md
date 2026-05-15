@@ -19,3 +19,4 @@ Architecture Decision Records for the results verification service.
 | [ADR-013](ADR-013-mock-listener.md) | Mock listener for development and testing | Accepted |
 | [ADR-014](ADR-014-experiment-naming-convention.md) | Experiment folder naming convention and run_id stamping | Accepted |
 | [ADR-015](ADR-015-decoupled-entry-point.md) | Decoupled entry point to support future test generator | Accepted |
+| [ADR-016](ADR-016-comparison-registry.md) | Strategy pattern for extensible comparison registry | Accepted |

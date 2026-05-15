@@ -11,14 +11,13 @@ If either check fails the run is aborted and no comparison runs.
 Entry point: run_gate()
 """
 
-import hashlib
-from pathlib import Path
+from src.database.models import get_active_gs_version
+from src.registration.registrar import compute_checksum
 
 
 def checksum_check(file_path: str, expected_hash: str) -> bool:
     """Return True if the file's SHA-256 matches expected_hash."""
-    # TODO: implement
-    pass
+    return compute_checksum(file_path) == expected_hash
 
 
 def subset_check(workbook_sample_ids: list[str],
@@ -33,10 +32,20 @@ def subset_check(workbook_sample_ids: list[str],
 
 def run_gate(conn, experiment: dict) -> tuple[bool, str]:
     """
-    Run the full pre-verification gate for one experiment.
-    
+    Run the pre-verification gate for one experiment.
+
+    Checks that an active registered gold standard exists in the
+    database for this experiment. The database is the source of
+    truth — if a registered version exists, we trust it.
+
     Returns (passed: bool, status: str) where status is one of:
-      'pass' | 'checksum_fail' | 'subset_fail'
+      'pass' | 'no_gold_standard'
+
+    Note: checksum_check() remains in this module for potential
+    use in a future re-registration workflow but is not called
+    here. Subset validity check is Phase 3.
     """
-    # TODO: implement
-    pass
+    active = get_active_gs_version(conn, experiment["experiment_id"])
+    if active is None:
+        return (False, "no_gold_standard")
+    return (True, "pass")

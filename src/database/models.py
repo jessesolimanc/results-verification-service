@@ -65,6 +65,19 @@ def retire_gs_version(conn, gs_exp_version_id: str, superseded_at: str) -> None:
     )
 
 
+def get_gs_samples(conn, gs_exp_version_id: str) -> list[dict]:
+    """Return all samples for a gold standard experiment version."""
+    rows = conn.execute(
+        """
+        SELECT gs_sample_id, sample_id, primary_metric, primary_metric_value, full_metrics
+        FROM gold_standard_samples
+        WHERE gs_exp_version_id = ?
+        """,
+        (gs_exp_version_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 # ---------------------------------------------------------------
 # Run tracking
 # ---------------------------------------------------------------

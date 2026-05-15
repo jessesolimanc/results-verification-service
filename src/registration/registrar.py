@@ -18,7 +18,7 @@ import json
 import uuid
 from datetime import datetime, timezone
 
-from database.models import (
+from src.database.models import (
     get_active_gs_version,
     insert_gs_exp_version,
     insert_gs_sample,
@@ -64,6 +64,11 @@ def register_gold_standard(conn, experiment_id: str, file_path: str,
     NOTE:   Handles wide-format CSVs only (4 metadata rows, one row
             per sample). Long/melted format CSVs (e.g. RnDdata) 
             require pivot preprocessing — see STATUS.md.
+
+    Checksum_hash is stored at registration time as an audit trail
+    and to support a future re-registration guard workflow.
+    It is not read during verification — the database is the source
+    of truth for gold standard values.
     """
     checksum = compute_checksum(file_path)
     rows = read_gold_standard_csv(file_path)

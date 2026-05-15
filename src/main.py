@@ -13,11 +13,11 @@ import json
 import yaml
 from pathlib import Path
 
-from database.db import get_connection, initialise_database
-from database.models import get_all_processed_run_ids
-from listener.listener import listen_async, listen_async_mock, parse_experiment_notification
-from orchestrator.orchestrator import load_manifest
-from registration.registrar import register_gold_standard
+from src.database.db import get_connection, initialise_database
+from src.database.models import get_all_processed_run_ids
+from src.listener.listener import listen_async, listen_async_mock, parse_experiment_notification
+from src.orchestrator.orchestrator import load_manifest
+from src.registration.registrar import register_gold_standard
 
 
 def load_config() -> dict:

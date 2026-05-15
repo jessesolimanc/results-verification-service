@@ -29,7 +29,7 @@ async def listen_async_mock(config: dict, on_notification) -> None:
     payload = {
         "schema": "public",
         "op": "insert",
-        "experimentId": "EXP_LT_control_assay_run_20260514_001_20260514_1504",
+        "experimentId": "T087_run3_compressed_1_run_20260514_001_20260514_1504",
         "name": "mock_report",
         "user": "mock_user",
     }

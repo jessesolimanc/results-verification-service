@@ -2,7 +2,7 @@
 
 Quick reference for current implementation state. Update this file at the end of every development session.
 
-Last updated: 2026-05-14 (session 5)
+Last updated: 2026-05-14 (session 6)
 Current phase: Phase 2 — Happy path end to end
 
 ---
@@ -17,6 +17,7 @@ Current phase: Phase 2 — Happy path end to end
 | `models.py` | `insert_gs_exp_version()` | ✅ Done | |
 | `models.py` | `insert_gs_sample()` | ✅ Done | |
 | `models.py` | `get_active_gs_version()` | ✅ Done | |
+| `models.py` | `get_gs_samples()` | ✅ Done | Returns list of sample dicts for a gs_exp_version_id |
 | `models.py` | `retire_gs_version()` | ✅ Done | |
 | `models.py` | `insert_run()` | ✅ Done | |
 | `models.py` | `get_all_processed_run_ids()` | ✅ Done | Replaces get_unprocessed_runs() — NOTIFY/LISTEN push model needs deduplication check, not a poll query |
@@ -41,9 +42,9 @@ Current phase: Phase 2 — Happy path end to end
 ### `src/gate/`
 | File | Function | Status | Notes |
 |---|---|---|---|
-| `gate.py` | `checksum_check()` | ⬜ Not started | Imports compute_checksum from registrar |
-| `gate.py` | `subset_check()` | ⬜ Not started | |
-| `gate.py` | `run_gate()` | ⬜ Not started | |
+| `gate.py` | `checksum_check()` | ✅ Done | Delegates to compute_checksum from registrar |
+| `gate.py` | `subset_check()` | 🔲 Stub | Phase 3 |
+| `gate.py` | `run_gate()` | ✅ Done | Returns (bool, status); no_gold_standard / pass. DB is source of truth — checksum_check not called here |
 
 ### `src/orchestrator/`
 | File | Function | Status | Notes |
@@ -55,8 +56,11 @@ Current phase: Phase 2 — Happy path end to end
 ### `src/comparator/`
 | File | Function | Status | Notes |
 |---|---|---|---|
-| `comparator.py` | `compare_sample()` | ⬜ Not started | |
-| `comparator.py` | `compare_experiment()` | ⬜ Not started | |
+| `comparator.py` | `compare_experiment()` | ✅ Done | Dispatches to registry; raises ValueError on unknown type |
+| `registry.py` | `COMPARISON_REGISTRY` | ✅ Done | Maps type strings to strategy handlers; count_tolerance wired |
+| `strategies/__init__.py` | — | ✅ Done | Package marker |
+| `strategies/count_tolerance.py` | `compare_sample()` | ✅ Done | Zero expected_value guard |
+| `strategies/count_tolerance.py` | `run_count_tolerance()` | ✅ Done | Strategy entry point |
 
 ### `src/llm/`
 | File | Function | Status | Notes |
@@ -106,6 +110,9 @@ Current phase: Phase 2 — Happy path end to end
 | RnDdata CSV uses long/melted format — needs pivot preprocessing. Not needed for MVP. | 🔲 Future |
 | Pipeline DB schema — reports_table_changes NOTIFY channel confirmed. ExperimentId carries full {exp_id}_{run_id}_{timestamp} string | ✅ Resolved |
 | Workbook generator — automates workbook stamping with run_id. Out of scope for MVP, done manually. | 🔲 Future |
+| manifest gold_standard_checksum field is redundant — gate reads checksum from DB. Field can be removed from manifest schema in a future cleanup. | 🔲 Future |
+| manifest gold_standard_checksum field is redundant — gate reads checksum from DB. Field can be removed from manifest schema in a future cleanup. | 🔲 Future |
+| PRIMARY_METRIC constant in registrar.py is vulnerable to column renames — removed when MVP scaffolding is dropped. | 🔲 Future |
 
 ---
 
@@ -129,13 +136,13 @@ Current phase: Phase 2 — Happy path end to end
 - [x] models.py gold standard insert functions
 
 ### Phase 2 — Happy path end to end
-- [ ] models.py remaining insert functions
-- [ ] Listener — mock + real (asyncpg)
+- [x] models.py remaining insert functions
+- [x] Listener — mock + real (asyncpg)
 - [ ] Orchestrator (manifest loading, folder lookup, flow coordination)
-- [ ] Pre-verification gate (checksum check)
-- [ ] Comparator (per-sample comparison)
+- [x] Pre-verification gate (checksum check)
+- [x] Comparator (per-sample comparison)
 - [ ] Reporter (basic structured report, no LLM)
-- [ ] main.py run() wired to asyncio event loop
+- [x] main.py run() wired to asyncio event loop
 
 ### Phase 3 — Harden and complete
 - [ ] Subset validity check in gate
@@ -151,6 +158,11 @@ Current phase: Phase 2 — Happy path end to end
 ---
 
 ## Notes
+
+Import audit (session 6):
+- All internal imports across `src/` now use the full `src.` prefix (required for smoke_test.py to resolve modules from project root)
+- Files updated: gate.py, comparator.py, registry.py, count_tolerance.py, registrar.py, main.py
+- Smoke test confirmed working end-to-end
 
 Listener redesign (session 4):
 - Pipeline DB is PostgreSQL with existing NOTIFY triggers on Reports and Workbooks tables

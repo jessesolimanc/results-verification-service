@@ -76,6 +76,23 @@ offset the JSON querying cost:
 - Pass rate per experiment across builds
 - Deviation trend per metric per experiment across builds
 
+## Pipeline output schema changes
+
+If the pipeline output CSV schema changes (column names renamed, columns
+added or removed), the correct response is:
+
+1. Re-register the gold standard with the new CSV format
+2. The new `full_metrics` blob captures whatever columns exist in the new format
+3. The comparator deserialises both blobs and compares matching keys — no
+   code changes required
+
+This means the verification service is effectively immune to pipeline output
+schema changes as long as the gold standard is kept current. The only
+exception is the MVP scaffolding (`PRIMARY_METRIC` constant hardcoded as
+`"UM-01_CountsPer50ul"`) which would need updating if that column is renamed.
+This is another argument for removing the scaffolding once full JSON
+comparison is implemented.
+
 ## Alternatives considered
 - **Normalised rows (Option A)** — rejected because it requires the registrar
   to understand per-experiment column semantics, creating coupling that scales
