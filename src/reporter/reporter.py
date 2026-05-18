@@ -40,10 +40,21 @@ def determine_run_verdict(experiment_results: list[dict],
     Roll up experiment-level verdicts into a run-level build verdict
     according to the build_verdict_policy from the manifest.
 
-    Any stability experiment failing → 'fail'.
-    Any non-stability experiment failing (with no stability fail) → 'warn'.
-    All pass → 'pass'.
+    Supported policy values:
+      rule:                   "all_stability_experiments_must_pass"
+      on_exploratory_failure: "warn_only"
+
+    Raises ValueError for unrecognised policy values so that unsupported
+    manifests fail loudly rather than silently applying wrong behaviour.
     """
+    rule = build_verdict_policy.get("rule")
+    on_exploratory_failure = build_verdict_policy.get("on_exploratory_failure")
+
+    if rule != "all_stability_experiments_must_pass":
+        raise ValueError(f"Unsupported build_verdict_policy rule: {rule!r}")
+    if on_exploratory_failure != "warn_only":
+        raise ValueError(f"Unsupported on_exploratory_failure policy: {on_exploratory_failure!r}")
+
     stability = [r for r in experiment_results if r["classification"] == "stability"]
     if any(r["verdict"] == "fail" for r in stability):
         return "fail"
@@ -137,7 +148,7 @@ def write_report(conn, config: dict, run_id: str,
             "criteria":        agg["criteria"],
             "samples_passed":  agg["passed"],
             "samples_failed":  agg["failed"],
-            "verdict":         "PASS" if agg["failed"] == 0 else "FAIL",
+            "verdict":         "pass" if agg["failed"] == 0 else "fail",
             "notes":           "",
         })
 
