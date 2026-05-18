@@ -94,13 +94,14 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE TABLE IF NOT EXISTS experiment_results (
     result_id           TEXT        PRIMARY KEY,
     run_id              TEXT        NOT NULL REFERENCES runs (run_id),
-    gs_exp_version_id   TEXT        NOT NULL REFERENCES gold_standard_exp_versions (gs_exp_version_id),
+    gs_exp_version_id   TEXT        REFERENCES gold_standard_exp_versions (gs_exp_version_id),
+                                                    -- NULL when gate fails with no_gold_standard
     experiment_id       TEXT        NOT NULL,       -- denormalised for convenient querying
     feature_set         TEXT        NOT NULL,
     classification      TEXT        NOT NULL        -- "stability" | "exploratory"
         CHECK (classification IN ('stability', 'exploratory')),
-    pre_verify_status   TEXT        NOT NULL        -- "pass" | "checksum_fail" | "subset_fail"
-        CHECK (pre_verify_status IN ('pass', 'checksum_fail', 'subset_fail')),
+    pre_verify_status   TEXT        NOT NULL
+        CHECK (pre_verify_status IN ('pass', 'checksum_fail', 'subset_fail', 'no_gold_standard', 'result_not_found')),
     verdict             TEXT        NOT NULL        -- "pass" | "fail" | "warn" | "aborted"
         CHECK (verdict IN ('pass', 'fail', 'warn', 'aborted')),
     verified_at         TEXT        NOT NULL        -- ISO-8601

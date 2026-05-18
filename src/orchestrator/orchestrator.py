@@ -105,7 +105,7 @@ def verify_run(conn, config: dict, run_id: str, manifest: dict) -> None:
                 sample_results = comparison["comparison_results"]
             except (FileNotFoundError, ValueError) as e:
                 print(f"Warning: {e}")
-                gate_passed = False
+                gate_status = "result_not_found"
 
         experiment_results.append({
             "experiment_id":  experiment["experiment_id"],
@@ -131,9 +131,6 @@ def verify_run(conn, config: dict, run_id: str, manifest: dict) -> None:
         })
 
         for exp_result in experiment_results:
-            if exp_result["comparison"] is None:
-                continue  # gate or result lookup failed — no DB record for this experiment
-
             result_id = str(uuid.uuid4())
             exp_result["result_id"] = result_id
             comparison = exp_result["comparison"]
@@ -141,14 +138,17 @@ def verify_run(conn, config: dict, run_id: str, manifest: dict) -> None:
             insert_experiment_result(conn, {
                 "result_id":         result_id,
                 "run_id":            run_id,
-                "gs_exp_version_id": comparison["gs_exp_version_id"],
+                "gs_exp_version_id": comparison["gs_exp_version_id"] if comparison else None,
                 "experiment_id":     exp_result["experiment_id"],
                 "feature_set":       exp_result["feature_set"],
                 "classification":    exp_result["classification"],
                 "pre_verify_status": exp_result["gate_status"],
-                "verdict":           exp_result["verdict"],
+                "verdict":           "aborted" if comparison is None else exp_result["verdict"],
                 "verified_at":       now,
             })
+
+            if comparison is None:
+                continue
 
             gs_samples_by_id = comparison["gs_samples"]
             for sr in exp_result["sample_results"]:
