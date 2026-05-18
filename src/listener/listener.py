@@ -53,9 +53,25 @@ async def listen_async(config: dict, token: asyncio.Event, on_notification) -> N
                     except Exception as e:
                         print(f"Notification handler error: {e}")
 
+                conn_terminated = asyncio.Event()
+                conn.add_termination_listener(lambda _: conn_terminated.set())
+
                 await conn.add_listener(CHANNEL, _handler)
-                await token.wait()
-                await conn.remove_listener(CHANNEL, _handler)
+
+                # Wait for shutdown OR connection drop — whichever comes first.
+                # Without this, a dropped connection leaves the service silently idle.
+                done, pending = await asyncio.wait(
+                    [
+                        asyncio.ensure_future(token.wait()),
+                        asyncio.ensure_future(conn_terminated.wait()),
+                    ],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for t in pending:
+                    t.cancel()
+
+                if not conn.is_closed():
+                    await conn.remove_listener(CHANNEL, _handler)
             finally:
                 await conn.close()
 

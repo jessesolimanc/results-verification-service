@@ -2,9 +2,9 @@
 main.py — entry point for the results verification service.
 
 Usage:
-    python src/main.py --init      Initialise the database
-    python src/main.py --register  Run the gold standard registration tool
-    python src/main.py --run       Start the verification service
+    python -m src.main --init      Initialise the database
+    python -m src.main --register  Run the gold standard registration tool
+    python -m src.main --run       Start the verification service
 """
 
 import argparse

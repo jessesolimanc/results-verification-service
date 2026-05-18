@@ -21,7 +21,7 @@ pipeline:
 
 listener:
   # Set to true to use the mock listener (no pipeline DB required)
-  use_mock: true
+  use_mock: false
 
 # Manifest schema note:
 # experiment entries use "comparisons" list (ADR-016), NOT "sample_tolerances"
