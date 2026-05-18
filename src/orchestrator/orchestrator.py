@@ -152,8 +152,6 @@ def verify_run(conn, config: dict, run_id: str, manifest: dict) -> None:
 
             gs_samples_by_id = comparison["gs_samples"]
             for sr in exp_result["sample_results"]:
-                if sr.get("actual_value") is None:
-                    continue  # sample not found in results — captured in verdict, skip DB row
                 gs_sample = gs_samples_by_id.get(sr["sample_id"])
                 insert_sample_result(conn, {
                     "sample_result_id": str(uuid.uuid4()),

@@ -130,7 +130,7 @@ CREATE TABLE IF NOT EXISTS sample_results (
     sample_id           TEXT    NOT NULL,
     metric              TEXT    NOT NULL,       -- column name e.g. UM-01_CountsPer50ul
     comparison_type     TEXT    NOT NULL,       -- e.g. count_tolerance
-    actual_value        REAL    NOT NULL,
+    actual_value        REAL,                  -- NULL when sample is missing from result CSV
     expected_value      REAL    NOT NULL,
     deviation_percent   REAL,                  -- NULL when expected_value is zero
     verdict             TEXT    NOT NULL
