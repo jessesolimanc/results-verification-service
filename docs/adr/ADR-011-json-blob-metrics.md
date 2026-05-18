@@ -76,7 +76,71 @@ offset the JSON querying cost:
 - Pass rate per experiment across builds
 - Deviation trend per metric per experiment across builds
 
-## Pipeline output schema changes
+## Amendment — sample_results normalised to per-metric rows
+
+**Date:** 2026-05-18
+
+**Context:** The original design stored per-sample actual and expected values
+as JSON blobs (`full_actual_metrics`, `full_expected_metrics`) in
+`sample_results`, with scalar scaffolding columns (`actual_value`,
+`expected_value`, `deviation_percent`) for simple single-metric queries.
+
+**Problem identified:** A single set of scalar columns implicitly assumes
+one metric per sample. With multiple dye channels (4-10 per experiment),
+a sample has multiple actual and expected values — one per column. The
+scalar columns can only hold one value, making the rest inaccessible
+without deserialising JSON. This is the same problem the JSON blob design
+solved for `gold_standard_samples`, but applied incorrectly to results.
+
+**Resolution:** `sample_results` is normalised to one row per
+`(sample_id, metric)` combination — the same melt pattern used in the
+detail report. The JSON blob columns are removed entirely from
+`sample_results`. Scalar columns are retained but now correctly represent
+a single metric per row.
+
+**Updated `sample_results` schema:**
+
+```sql
+CREATE TABLE IF NOT EXISTS sample_results (
+    sample_result_id    TEXT    PRIMARY KEY,
+    result_id           TEXT    NOT NULL
+        REFERENCES experiment_results (result_id),
+    gs_sample_id        TEXT    NOT NULL
+        REFERENCES gold_standard_samples (gs_sample_id),
+    sample_id           TEXT    NOT NULL,
+    metric              TEXT    NOT NULL,       -- e.g. UM-01_CountsPer50ul
+    comparison_type     TEXT    NOT NULL,       -- e.g. count_tolerance
+    actual_value        REAL    NOT NULL,
+    expected_value      REAL    NOT NULL,
+    deviation_percent   REAL,
+    verdict             TEXT    NOT NULL
+        CHECK (verdict IN ('pass', 'fail')),
+    notes               TEXT    DEFAULT NULL
+);
+```
+
+**Removed from `sample_results`:**
+- `primary_metric` — replaced by `metric`
+- `primary_metric_value` — replaced by `actual_value` / `expected_value`
+- `full_actual_metrics` — no longer needed; data is in normalised rows
+- `full_expected_metrics` — no longer needed; data is in normalised rows
+
+**`gold_standard_samples` unchanged:** The `full_metrics` JSON blob is
+retained in `gold_standard_samples` as a complete archival record of what
+was registered. The JSON approach remains correct there since registration
+captures the full CSV row and column variability is a registration concern.
+
+**Longitudinal queries now work cleanly:**
+
+```sql
+SELECT r.pipeline_build, sr.actual_value, sr.deviation_percent
+FROM sample_results sr
+JOIN experiment_results er ON sr.result_id = er.result_id
+JOIN runs r ON er.run_id = r.run_id
+WHERE sr.sample_id = '2DU008_01'
+  AND sr.metric = 'UM-01_CountsPer50ul'
+ORDER BY r.triggered_at ASC;
+```
 
 If the pipeline output CSV schema changes (column names renamed, columns
 added or removed), the correct response is:

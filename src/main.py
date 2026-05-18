@@ -16,7 +16,7 @@ from pathlib import Path
 from src.database.db import get_connection, initialise_database
 from src.database.models import get_all_processed_run_ids
 from src.listener.listener import listen_async, listen_async_mock, parse_experiment_notification
-from src.orchestrator.orchestrator import load_manifest
+from src.orchestrator.orchestrator import load_manifest, verify_run
 from src.registration.registrar import register_gold_standard
 
 
@@ -107,7 +107,7 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
 
         if in_progress[run_id] == expected:
             print(f"Run {run_id}: all experiments received — starting verification")
-            # orchestrator.verify_run() will go here
+            verify_run(conn, config, run_id, manifests[run_id])
             processed_run_ids.add(run_id)
             del in_progress[run_id]
             del manifests[run_id]

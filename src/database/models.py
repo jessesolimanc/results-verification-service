@@ -130,18 +130,18 @@ def insert_experiment_result(conn, record: dict) -> str:
 
 
 def insert_sample_result(conn, record: dict) -> None:
-    """Insert a single sample result."""
+    """Insert a single sample result (one row per sample per metric)."""
     try:
         conn.execute(
             """
             INSERT INTO sample_results
-                (sample_result_id, result_id, gs_sample_id, sample_id, primary_metric,
-                 actual_value, expected_value, deviation_percent,
-                 full_actual_metrics, full_expected_metrics, verdict)
+                (sample_result_id, result_id, gs_sample_id, sample_id,
+                 metric, comparison_type, actual_value, expected_value,
+                 deviation_percent, verdict, notes)
             VALUES
-                (:sample_result_id, :result_id, :gs_sample_id, :sample_id, :primary_metric,
-                 :actual_value, :expected_value, :deviation_percent,
-                 :full_actual_metrics, :full_expected_metrics, :verdict)
+                (:sample_result_id, :result_id, :gs_sample_id, :sample_id,
+                 :metric, :comparison_type, :actual_value, :expected_value,
+                 :deviation_percent, :verdict, :notes)
             """,
             record,
         )
@@ -161,9 +161,11 @@ def insert_report(conn, record: dict) -> None:
         conn.execute(
             """
             INSERT INTO reports
-                (report_id, run_id, result_id, llm_narrative, overall_verdict, generated_at)
+                (report_id, run_id, result_id, llm_narrative,
+                 overall_verdict, generated_at, report_json)
             VALUES
-                (:report_id, :run_id, :result_id, :llm_narrative, :overall_verdict, :generated_at)
+                (:report_id, :run_id, :result_id, :llm_narrative,
+                 :overall_verdict, :generated_at, :report_json)
             """,
             record,
         )

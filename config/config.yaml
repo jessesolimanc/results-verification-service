@@ -10,6 +10,8 @@ paths:
   gold_standards_dir: "F:/RegressionTesting/gold_standards"
   workbooks_dir:      "F:/RegressionTesting/workbooks"
   database:           "F:/RegressionTesting/verification.db"
+  reports_dir:        "C:/RegressionTesting/reports"
+  results_dir:        "C:/RegressionTesting/results"
 
 pipeline:
   # Connection string for the central pipeline database

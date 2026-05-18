@@ -2,7 +2,7 @@
 
 Quick reference for current implementation state. Update this file at the end of every development session.
 
-Last updated: 2026-05-14 (session 6)
+Last updated: 2026-05-18 (session 7)
 Current phase: Phase 2 — Happy path end to end
 
 ---
@@ -50,8 +50,8 @@ Current phase: Phase 2 — Happy path end to end
 | File | Function | Status | Notes |
 |---|---|---|---|
 | `orchestrator.py` | `load_manifest()` | ✅ Done | Constructs path from run_id + config; raises FileNotFoundError if missing |
-| `orchestrator.py` | `find_result_folder()` | 🔲 Stub | Globs for {exp_id}_{run_id}_* under workbooks_dir |
-| `orchestrator.py` | `verify_run()` | 🔲 Stub | |
+| `orchestrator.py` | `find_result_folder()` | ✅ Done | Globs for {exp_id}_{run_id}_* under results_dir; raises on 0 or >1 matches |
+| `orchestrator.py` | `verify_run()` | ✅ Done | Full flow: gate → compare → persist → report |
 
 ### `src/comparator/`
 | File | Function | Status | Notes |
@@ -59,8 +59,8 @@ Current phase: Phase 2 — Happy path end to end
 | `comparator.py` | `compare_experiment()` | ✅ Done | Dispatches to registry; raises ValueError on unknown type |
 | `registry.py` | `COMPARISON_REGISTRY` | ✅ Done | Maps type strings to strategy handlers; count_tolerance wired |
 | `strategies/__init__.py` | — | ✅ Done | Package marker |
-| `strategies/count_tolerance.py` | `compare_sample()` | ✅ Done | Zero expected_value guard |
-| `strategies/count_tolerance.py` | `run_count_tolerance()` | ✅ Done | Strategy entry point |
+| `strategies/count_tolerance.py` | `compare_sample()` | ✅ Done | Zero expected_value guard; result includes comparison_type and metric fields |
+| `strategies/count_tolerance.py` | `run_count_tolerance()` | ✅ Done | Iterates params["columns"]; one result per (sample, column) |
 
 ### `src/llm/`
 | File | Function | Status | Notes |
@@ -71,9 +71,9 @@ Current phase: Phase 2 — Happy path end to end
 ### `src/reporter/`
 | File | Function | Status | Notes |
 |---|---|---|---|
-| `reporter.py` | `determine_experiment_verdict()` | ⬜ Not started | |
-| `reporter.py` | `determine_run_verdict()` | ⬜ Not started | |
-| `reporter.py` | `write_report()` | ⬜ Not started | |
+| `reporter.py` | `determine_experiment_verdict()` | ✅ Done | Any sample fail → experiment fail |
+| `reporter.py` | `determine_run_verdict()` | ✅ Done | Applies build_verdict_policy; stability fail → fail, exploratory fail → warn |
+| `reporter.py` | `write_report()` | ✅ Done | Writes detail_report.csv + summary_report.csv; stores JSON blob in reports table |
 
 ### `src/main.py`
 | Function | Status | Notes |
@@ -82,7 +82,7 @@ Current phase: Phase 2 — Happy path end to end
 | `init()` | ✅ Done | |
 | `register()` | ✅ Done | |
 | `run()` | ✅ Done | |
-| `run_service()` | ✅ Done | Async loop — accumulates experiments per run_id, triggers verify_run when set is complete |
+| `run_service()` | ✅ Done | Async loop — accumulates experiments per run_id, calls verify_run() when set is complete |
 
 ---
 
@@ -93,8 +93,11 @@ Current phase: Phase 2 — Happy path end to end
 | Initial schema from DDL | ✅ Applied | |
 | Added `primary_metric`, `primary_metric_value` to `gold_standard_samples` | ✅ Applied | MVP scaffolding — to be dropped once full JSON comparison implemented |
 | Added `full_metrics` JSON column to `gold_standard_samples` | ✅ Applied | |
-| Added `primary_metric`, `actual_value`, `expected_value`, `deviation_percent` to `sample_results` | ✅ Applied | MVP scaffolding |
-| Added `full_actual_metrics`, `full_expected_metrics` JSON columns to `sample_results` | ✅ Applied | |
+| Added `primary_metric`, `actual_value`, `expected_value`, `deviation_percent` to `sample_results` | 🔁 Superseded | Replaced by normalised schema below |
+| Added `full_actual_metrics`, `full_expected_metrics` JSON columns to `sample_results` | 🔁 Superseded | Replaced by normalised schema below |
+| Normalised `sample_results` — one row per (sample, metric); added `metric`, `comparison_type`, `notes`; `deviation_percent` now nullable | ✅ Applied (DDL) | Requires DB re-init and re-registration — see session 7 notes |
+| Added `report_json TEXT NOT NULL DEFAULT ''` to `reports` | ✅ Applied (DDL) | Stores structured JSON for future HTML rendering (ADR-017) |
+| Drop `primary_metric`, `primary_metric_value` scaffold columns from `gold_standard_samples` | ⬜ To do | Requires registrar.py update to remove PRIMARY_METRIC constant and scaffold fields from sample records |
 
 ---
 
@@ -111,8 +114,8 @@ Current phase: Phase 2 — Happy path end to end
 | Pipeline DB schema — reports_table_changes NOTIFY channel confirmed. ExperimentId carries full {exp_id}_{run_id}_{timestamp} string | ✅ Resolved |
 | Workbook generator — automates workbook stamping with run_id. Out of scope for MVP, done manually. | 🔲 Future |
 | manifest gold_standard_checksum field is redundant — gate reads checksum from DB. Field can be removed from manifest schema in a future cleanup. | 🔲 Future |
-| manifest gold_standard_checksum field is redundant — gate reads checksum from DB. Field can be removed from manifest schema in a future cleanup. | 🔲 Future |
 | PRIMARY_METRIC constant in registrar.py is vulnerable to column renames — removed when MVP scaffolding is dropped. | 🔲 Future |
+| Results folder — currently manually maintained with CSVs dropped in directly. Future implementation requires password-protected unzip step before CSVs are accessible. | 🔲 Future |
 
 ---
 
@@ -138,10 +141,10 @@ Current phase: Phase 2 — Happy path end to end
 ### Phase 2 — Happy path end to end
 - [x] models.py remaining insert functions
 - [x] Listener — mock + real (asyncpg)
-- [ ] Orchestrator (manifest loading, folder lookup, flow coordination)
+- [x] Orchestrator (manifest loading, folder lookup, flow coordination)
 - [x] Pre-verification gate (checksum check)
 - [x] Comparator (per-sample comparison)
-- [ ] Reporter (basic structured report, no LLM)
+- [x] Reporter (detail + summary CSV, JSON blob in DB)
 - [x] main.py run() wired to asyncio event loop
 
 ### Phase 3 — Harden and complete
@@ -158,6 +161,15 @@ Current phase: Phase 2 — Happy path end to end
 ---
 
 ## Notes
+
+Reporter + orchestrator + schema redesign (session 7):
+- Reporter implemented: detail_report.csv (one row per sample/metric/experiment), summary_report.csv (one row per feature_set/comparison_type/metric), JSON blob stored in reports table
+- Orchestrator fully implemented: find_result_folder globs for {exp_id}_{run_id}_* under results_dir; verify_run orchestrates gate → compare → DB inserts → write_report
+- verify_run wired into main.py run_service — Phase 2 happy path is now end-to-end
+- sample_results schema redesigned: normalised to one row per (sample, metric); added metric, comparison_type, notes columns; removed flat-value scaffolding and JSON blob columns (ADR-017)
+- report_json added to reports table (ADR-017)
+- DB must be re-initialised and gold standard re-registered before smoke testing (schema changed)
+- gold_standard_samples scaffold columns (primary_metric, primary_metric_value) still present — cleanup tracked in schema status table above
 
 Import audit (session 6):
 - All internal imports across `src/` now use the full `src.` prefix (required for smoke_test.py to resolve modules from project root)
