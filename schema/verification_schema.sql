@@ -35,8 +35,6 @@ CREATE TABLE IF NOT EXISTS gold_standard_samples (
     gs_exp_version_id       TEXT    NOT NULL
         REFERENCES gold_standard_exp_versions (gs_exp_version_id),
     sample_id               TEXT    NOT NULL,
-    primary_metric          TEXT    NOT NULL,   -- scaffolding for MVP
-    primary_metric_value    REAL    NOT NULL,   -- scaffolding for MVP
     full_metrics            TEXT    NOT NULL,   -- JSON blob, all columns
     notes                   TEXT    DEFAULT NULL
 );

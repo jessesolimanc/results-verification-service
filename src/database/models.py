@@ -27,15 +27,13 @@ def insert_gs_exp_version(conn, record: dict) -> str:
 
 
 def insert_gs_sample(conn, record: dict) -> None:
-    """Insert a single gold standard sample expected value."""
+    """Insert a single gold standard sample."""
     conn.execute(
         """
         INSERT INTO gold_standard_samples
-            (gs_sample_id, gs_exp_version_id, sample_id, primary_metric,
-             primary_metric_value, full_metrics, notes)
+            (gs_sample_id, gs_exp_version_id, sample_id, full_metrics, notes)
         VALUES
-            (:gs_sample_id, :gs_exp_version_id, :sample_id, :primary_metric,
-             :primary_metric_value, :full_metrics, :notes)
+            (:gs_sample_id, :gs_exp_version_id, :sample_id, :full_metrics, :notes)
         """,
         record,
     )
@@ -69,7 +67,7 @@ def get_gs_samples(conn, gs_exp_version_id: str) -> list[dict]:
     """Return all samples for a gold standard experiment version."""
     rows = conn.execute(
         """
-        SELECT gs_sample_id, sample_id, primary_metric, primary_metric_value, full_metrics
+        SELECT gs_sample_id, sample_id, full_metrics
         FROM gold_standard_samples
         WHERE gs_exp_version_id = ?
         """,

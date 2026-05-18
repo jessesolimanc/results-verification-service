@@ -85,7 +85,7 @@ def verify_run(conn, config: dict, run_id: str, manifest: dict) -> None:
     experiment_results = []
 
     for experiment in manifest["experiments"]:
-        gate_passed, gate_status = run_gate(conn, experiment)
+        gate_passed, gate_status = run_gate(conn, experiment["experiment_id"])
         sample_results = []
         comparison = None
 

@@ -30,7 +30,7 @@ def subset_check(workbook_sample_ids: list[str],
     pass
 
 
-def run_gate(conn, experiment: dict) -> tuple[bool, str]:
+def run_gate(conn, experiment_id: str) -> tuple[bool, str]:
     """
     Run the pre-verification gate for one experiment.
 
@@ -45,7 +45,7 @@ def run_gate(conn, experiment: dict) -> tuple[bool, str]:
     use in a future re-registration workflow but is not called
     here. Subset validity check is Phase 3.
     """
-    active = get_active_gs_version(conn, experiment["experiment_id"])
+    active = get_active_gs_version(conn, experiment_id)
     if active is None:
         return (False, "no_gold_standard")
     return (True, "pass")

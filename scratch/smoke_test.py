@@ -1,41 +1,43 @@
 import sys
 from pathlib import Path
-
 sys.path.insert(0, str(Path(__file__).parent.parent))
-print(f"Path added: {sys.path[0]}")  # add this temporarily
 
-import sqlite3
 import json
 from src.database.db import get_connection
-from src.gate.gate import run_gate
-from src.comparator.comparator import compare_experiment
+from src.orchestrator.orchestrator import verify_run
 
+# minimal config pointing to your local paths
 config = {
     "paths": {
-        "database": "F:/RegressionTesting/verification.db"
+        "database":         "F:/RegressionTesting/verification.db",
+        "manifests_dir":    "F:/RegressionTesting/manifests",
+        "results_dir":      "F:/RegressionTesting/results",
+        "reports_dir":      "F:/RegressionTesting/reports"
     }
 }
 
-# minimal experiment dict — just what gate and comparator need
-experiment = {
-    "experiment_id": "T087_run3_compressed_1",  # whatever is registered
-    "comparisons": [
-        {"type": "count_tolerance", "tolerance_percent": 10.0}
-    ]
-}
+# use a fake but valid run_id
+run_id = "run_20260514_001"
 
-result_csv_path = "F:\CountableLabs\metadata\T078_run3_260408_1743\T078_run3\T078_run3_260408_1743_CountableDataSummary.csv"
+# load the manifest directly
+manifest_path = Path(config["paths"]["manifests_dir"]) / f"context_manifest_{run_id}.json"
+with open(manifest_path) as f:
+    manifest = json.load(f)
 
 conn = get_connection(config["paths"]["database"])
 
-# test the gate
-passed, status = run_gate(conn, experiment)
-print(f"Gate: {status}")
+# Wipe any previous smoke test run so the script is safely re-runnable.
+# Delete in FK order: reports → sample_results → experiment_results → runs.
+with conn:
+    conn.execute("DELETE FROM reports WHERE run_id = ?", (run_id,))
+    conn.execute(
+        "DELETE FROM sample_results WHERE result_id IN "
+        "(SELECT result_id FROM experiment_results WHERE run_id = ?)",
+        (run_id,),
+    )
+    conn.execute("DELETE FROM experiment_results WHERE run_id = ?", (run_id,))
+    conn.execute("DELETE FROM runs WHERE run_id = ?", (run_id,))
 
-# test the comparator
-if passed:
-    results = compare_experiment(conn, experiment, result_csv_path)
-    for r in results["comparison_results"]:
-        print(r)
+verify_run(conn, config, run_id, manifest)
 
 conn.close()

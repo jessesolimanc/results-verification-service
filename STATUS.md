@@ -2,8 +2,8 @@
 
 Quick reference for current implementation state. Update this file at the end of every development session.
 
-Last updated: 2026-05-18 (session 7)
-Current phase: Phase 2 — Happy path end to end
+Last updated: 2026-05-18 (session 8)
+Current phase: Phase 2 — Happy path end to end ✅ COMPLETE
 
 ---
 
@@ -97,7 +97,7 @@ Current phase: Phase 2 — Happy path end to end
 | Added `full_actual_metrics`, `full_expected_metrics` JSON columns to `sample_results` | 🔁 Superseded | Replaced by normalised schema below |
 | Normalised `sample_results` — one row per (sample, metric); added `metric`, `comparison_type`, `notes`; `deviation_percent` now nullable | ✅ Applied (DDL) | Requires DB re-init and re-registration — see session 7 notes |
 | Added `report_json TEXT NOT NULL DEFAULT ''` to `reports` | ✅ Applied (DDL) | Stores structured JSON for future HTML rendering (ADR-017) |
-| Drop `primary_metric`, `primary_metric_value` scaffold columns from `gold_standard_samples` | ⬜ To do | Requires registrar.py update to remove PRIMARY_METRIC constant and scaffold fields from sample records |
+| Drop `primary_metric`, `primary_metric_value` scaffold columns from `gold_standard_samples` | ✅ Applied (DDL) | registrar.py updated — PRIMARY_METRIC constant removed, sample records now store full_metrics JSON only |
 
 ---
 
@@ -114,7 +114,7 @@ Current phase: Phase 2 — Happy path end to end
 | Pipeline DB schema — reports_table_changes NOTIFY channel confirmed. ExperimentId carries full {exp_id}_{run_id}_{timestamp} string | ✅ Resolved |
 | Workbook generator — automates workbook stamping with run_id. Out of scope for MVP, done manually. | 🔲 Future |
 | manifest gold_standard_checksum field is redundant — gate reads checksum from DB. Field can be removed from manifest schema in a future cleanup. | 🔲 Future |
-| PRIMARY_METRIC constant in registrar.py is vulnerable to column renames — removed when MVP scaffolding is dropped. | 🔲 Future |
+| PRIMARY_METRIC constant in registrar.py — removed (session 7) | ✅ Resolved |
 | Results folder — currently manually maintained with CSVs dropped in directly. Future implementation requires password-protected unzip step before CSVs are accessible. | 🔲 Future |
 
 ---
@@ -161,6 +161,12 @@ Current phase: Phase 2 — Happy path end to end
 ---
 
 ## Notes
+
+Smoke test end-to-end confirmed (session 8):
+- Phase 2 happy path smoke test passing end-to-end — reports written, DB populated correctly
+- run_gate() signature corrected: now accepts experiment_id: str directly (was experiment: dict)
+- Root cause of blank reports: experiment_id typo in manifest (T087 vs T078) — manifests must match registered experiment_ids exactly
+- All diagnostic prints removed
 
 Reporter + orchestrator + schema redesign (session 7):
 - Reporter implemented: detail_report.csv (one row per sample/metric/experiment), summary_report.csv (one row per feature_set/comparison_type/metric), JSON blob stored in reports table
