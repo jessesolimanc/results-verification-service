@@ -17,7 +17,7 @@ Entry point: write_report()
 import csv
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from src.database.models import insert_report
@@ -164,7 +164,7 @@ def write_report(conn, config: dict, run_id: str,
             "result_id":       None,
             "llm_narrative":   "",
             "overall_verdict": run_verdict,
-            "generated_at":    datetime.utcnow().isoformat(),
+            "generated_at":    datetime.now(timezone.utc).isoformat(),
             "report_json":     json.dumps(report_blob),
         })
 
