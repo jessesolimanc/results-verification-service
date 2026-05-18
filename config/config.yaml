@@ -25,7 +25,7 @@ listener:
 
 # Manifest schema note:
 # experiment entries use "comparisons" list (ADR-016), NOT "sample_tolerances"
-# e.g. "comparisons": [{"type": "count_tolerance", "tolerance_percent": 10.0}]
+# e.g. "comparisons": [{"type": "count_tolerance", "columns": ["some_column"], "tolerance_percent": 10.0}]
 
 verification:
   # Default tolerance used when no experiment-specific tolerance is set
