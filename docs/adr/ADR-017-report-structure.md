@@ -88,7 +88,7 @@ simple threshold values (e.g. a future `correlation` type uses a minimum
 R² value, not a tolerance percentage). `criteria` is neutral enough to
 describe any comparison parameter.
 
-### 5. Multi-column comparison support via manifest `columns` field
+### 6. Multi-column comparison support via manifest `columns` field
 
 The `comparisons` entry in the manifest now includes a `columns` list
 declaring which CSV columns to compare for a given comparison type:
@@ -111,7 +111,7 @@ This change also supersedes the hardcoded `PRIMARY_METRIC` constant in
 scaffolding columns. With columns declared in the manifest, hardcoding
 is no longer needed.
 
-### 6. Report storage location
+### 7. Report storage location
 
 Reports are written to `{reports_dir}/{run_id}/` where `reports_dir` is
 configured in `config.yaml`. On the regression machine this is the F:
@@ -119,7 +119,7 @@ drive (`F:/RegressionTesting/reports/`) which is a dedicated 20TB
 archival storage drive. Path is config-driven — no code changes needed
 to change the location.
 
-### 7. Notes field as LLM placeholder
+### 8. Notes field as LLM placeholder
 
 The `notes` column in both report types is empty string for the MVP.
 It is explicitly designed as the future insertion point for LLM-generated

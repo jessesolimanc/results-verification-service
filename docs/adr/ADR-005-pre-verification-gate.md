@@ -52,8 +52,8 @@ to verification correctness.
 > experiment? If yes — trust the database and proceed. If no — abort.
 
 ```python
-def run_gate(conn, experiment):
-    active = get_active_gs_version(conn, experiment["experiment_id"])
+def run_gate(conn, experiment_id):
+    active = get_active_gs_version(conn, experiment_id)
     if active is None:
         return (False, "no_gold_standard")
     return (True, "pass")

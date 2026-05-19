@@ -42,6 +42,7 @@ The `sample_tolerances` field is replaced by a `comparisons` list:
   "comparisons": [
     {
       "type": "count_tolerance",
+      "columns": ["expected_count, actual_count"],
       "tolerance_percent": 10.0
     }
   ]

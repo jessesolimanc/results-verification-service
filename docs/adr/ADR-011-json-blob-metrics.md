@@ -151,11 +151,9 @@ added or removed), the correct response is:
    code changes required
 
 This means the verification service is effectively immune to pipeline output
-schema changes as long as the gold standard is kept current. The only
-exception is the MVP scaffolding (`PRIMARY_METRIC` constant hardcoded as
-`"UM-01_CountsPer50ul"`) which would need updating if that column is renamed.
-This is another argument for removing the scaffolding once full JSON
-comparison is implemented.
+schema changes as long as the gold standard is kept current, because the
+`full_metrics` blob captures the available columns and the comparator matches 
+values by key after deserialisation.
 
 ## Alternatives considered
 - **Normalised rows (Option A)** — rejected because it requires the registrar

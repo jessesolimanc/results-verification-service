@@ -63,35 +63,74 @@ await task                                    # wait for it to finish
 
 ---
 
-## asyncio.Queue — the thread-safe bridge
+## asyncio.Queue — coroutine-safe data passing
 
-A queue designed for passing data between coroutines safely. Also serves
-as a bridge between non-async code (like asyncpg's internal thread) and
-the async event loop.
+A queue designed for passing data between coroutines safely within the
+same event loop. Useful when one coroutine produces data and another
+consumes it asynchronously.
 
 ```python
 queue = asyncio.Queue()
 
-# Producer — puts items in (can be called from non-async context)
-queue.put_nowait(item)
+# Producer coroutine
+async def producer():
+    await queue.put(item)
 
-# Consumer — waits until something is available
-item = await queue.get()
+# Consumer coroutine
+async def consumer():
+    item = await queue.get()
 ```
 
-**Why it matters in the listener:**
-asyncpg calls its notification callback from its own internal thread,
-outside the event loop. You can't `await` from there. The queue acts as
-a safe handoff point — asyncpg drops the payload in, the event loop
-picks it up.
+**Important:** `asyncio.Queue` is safe across coroutines in the same
+event loop but is NOT thread-safe across OS threads. If you need to
+pass data from a true OS thread into the event loop, use
+`loop.call_soon_threadsafe()` instead.
 
+**Note on the verification service listener:** The actual listener
+implementation does NOT use a queue. asyncpg calls the notification
+handler as a native async coroutine directly within the event loop,
+so no thread bridge is needed. See the listener pattern section below.
+
+---
+
+## asyncio.Event — signalling between coroutines
+
+A simple flag that coroutines can check or wait on. Used for two
+purposes in the verification service:
+
+**Cancellation token** — signals the listener to shut down gracefully:
+
+```python
+token = asyncio.Event()
+
+while not token.is_set():
+    ...   # keep running
+
+# from outside, to stop:
+token.set()
 ```
-asyncpg thread          event loop
-──────────────          ──────────────────
-_on_notify() called
-queue.put_nowait()  →   await queue.get() unblocks
-                        await on_notification(payload)
+
+**Connection termination detection** — asyncpg fires a termination
+listener when a connection drops. Wrapping it in an `asyncio.Event`
+lets the async code wait on it cleanly:
+
+```python
+conn_terminated = asyncio.Event()
+conn.add_termination_listener(lambda _: conn_terminated.set())
+
+# wait for shutdown OR connection drop — whichever comes first
+done, pending = await asyncio.wait(
+    [
+        asyncio.ensure_future(token.wait()),
+        asyncio.ensure_future(conn_terminated.wait()),
+    ],
+    return_when=asyncio.FIRST_COMPLETED,
+)
 ```
+
+This is more responsive than a polling timeout loop — the service
+reacts immediately to a dropped connection rather than waiting for
+the next poll interval.
 
 ---
 
@@ -115,22 +154,52 @@ keeps running until someone calls `token.set()`.
 
 ---
 
-## The producer-consumer pattern
+## The actual listener pattern
 
-A common async pattern where one part of the code **produces** data and
-another **consumes** it, decoupled by a queue.
+The verification service listener uses asyncpg's native async callback
+support — no queue needed. asyncpg calls the notification handler
+directly as a coroutine within the event loop:
 
+```python
+async def listen_async(config, token, on_notification):
+    while not token.is_set():
+        conn = await asyncpg.connect(db_url)
+
+        # async handler — called directly by asyncpg within the event loop
+        async def _handler(conn, pid, channel, payload):
+            data = json.loads(payload)
+            if data.get("op") == "insert":
+                await on_notification(payload)
+
+        # detect connection drop immediately
+        conn_terminated = asyncio.Event()
+        conn.add_termination_listener(lambda _: conn_terminated.set())
+
+        await conn.add_listener("reports_table_changes", _handler)
+
+        # wait for shutdown OR connection drop — whichever comes first
+        done, pending = await asyncio.wait(
+            [
+                asyncio.ensure_future(token.wait()),
+                asyncio.ensure_future(conn_terminated.wait()),
+            ],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for t in pending:
+            t.cancel()
+
+        await conn.close()
 ```
-Producer                    Queue               Consumer
-────────                    ─────               ────────
-generates data    →    put_nowait()    →    await get()
-                                             processes data
-```
 
-In the verification service:
-- **Producer** — asyncpg receives PostgreSQL NOTIFY, calls `_on_notify()`
-- **Queue** — `asyncio.Queue()` bridges the thread boundary
-- **Consumer** — event loop calls `on_notification()` with the payload
+**Why no queue?** asyncpg's `add_listener` accepts both sync and async
+callbacks. When given an async callback, it schedules it on the event
+loop directly — no thread boundary is crossed and no bridge is needed.
+
+**Why `asyncio.wait(FIRST_COMPLETED)`?** The listener needs to exit
+cleanly on either a deliberate shutdown (`token.set()`) or an unexpected
+connection drop (`conn_terminated`). Waiting on both simultaneously means
+the service reacts immediately to either event rather than being stuck
+waiting for a timeout.
 
 ---
 
@@ -188,24 +257,26 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
 ```
 PostgreSQL fires NOTIFY on reports_table_changes
         ↓
-asyncpg receives it on its internal thread
+asyncpg receives it and schedules _handler() on the event loop
         ↓
-asyncpg calls _on_notify(connection, pid, channel, payload)
+_handler() checks op == "insert" — ignores updates/deletes
         ↓
-_on_notify calls queue.put_nowait(payload)
-        ↓
-event loop: await queue.get() unblocks
-        ↓
-listen_async calls await on_notification(payload)
+_handler() calls await on_notification(payload)
         ↓
 handle_notification() in run_service runs
         ↓
 parse_experiment_notification() extracts exp_id and run_id
         ↓
-orchestrator.verify_run() is called
+experiment added to in_progress group for this run_id
         ↓
-listen_async goes back to waiting...
+if all expected experiments received → orchestrator.verify_run()
+        ↓
+listener goes back to waiting...
 ```
+
+Note: if the connection drops at any point, `conn_terminated` is set,
+`asyncio.wait` unblocks, and the outer `while` loop reconnects
+automatically.
 
 ---
 

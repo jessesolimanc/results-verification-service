@@ -30,6 +30,16 @@ def compare_sample(sample_id: str, comparison_type: str, metric: str,
     None and a 'note' field — division by zero avoided.
     """
     if expected_value == 0:
+        if actual_value == 0:
+            return {
+                "sample_id":         sample_id,
+                "comparison_type":   comparison_type,
+                "metric":            metric,
+                "actual_value":      actual_value,
+                "expected_value":    expected_value,
+                "deviation_percent": 0.0,
+                "verdict":           "pass",
+            }
         return {
             "sample_id":         sample_id,
             "comparison_type":   comparison_type,
@@ -38,7 +48,7 @@ def compare_sample(sample_id: str, comparison_type: str, metric: str,
             "expected_value":    expected_value,
             "deviation_percent": None,
             "verdict":           "fail",
-            "note":              "expected_value is zero — division avoided",
+            "note":              "expected_value is zero but actual is non-zero — division avoided",
         }
 
     deviation = round(abs(actual_value - expected_value) / expected_value * 100, 4)

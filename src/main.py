@@ -100,8 +100,12 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
             manifests[run_id] = manifest
             in_progress[run_id] = set()
 
-        in_progress[run_id].add(exp_id)
+        # in_progress[run_id].add(exp_id)
         expected = {exp["experiment_id"] for exp in manifests[run_id]["experiments"]}
+        if exp_id not in expected:
+            print(f"Warning: unexpected experiment {exp_id} for run {run_id} — ignoring")
+            return
+        in_progress[run_id].add(exp_id)
 
         print(f"Run {run_id}: {len(in_progress[run_id])}/{len(expected)} experiments received")
 
