@@ -10,12 +10,12 @@ paths:
   gold_standards_dir: "F:/RegressionTesting/gold_standards"
   workbooks_dir:      "F:/RegressionTesting/workbooks"
   database:           "F:/RegressionTesting/verification.db"
-  reports_dir:        "C:/RegressionTesting/reports"
-  results_dir:        "C:/RegressionTesting/results"
+  reports_dir:        "F:/RegressionTesting/reports"
+  results_dir:        "F:/CountableLabs/Data"
 
 pipeline:
   # Connection string for the central pipeline database
-  database_connection: ""
+  database_connection: "postgresql://postgres:FiLh4iAV8OWc7w5e+YvNvK3uhIWdN6cCce2oRjAxbE8=@localhost:5432/countablelabs"
   # How often to poll for completed runs (seconds)
   polling_interval_seconds: 30
 
