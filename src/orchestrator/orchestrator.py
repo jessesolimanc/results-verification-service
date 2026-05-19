@@ -99,13 +99,14 @@ def verify_run(conn, config: dict, run_id: str, manifest: dict) -> None:
                     raise FileNotFoundError(
                         f"No CountableDataSummary.csv found in {result_folder}"
                     )
+            except (FileNotFoundError, ValueError) as e:
+                print(f"Warning: {e}")
+                gate_status = "result_not_found"
+            else:
                 comparison = compare_experiment(
                     conn, experiment, str(result_csvs[0])
                 )
                 sample_results = comparison["comparison_results"]
-            except (FileNotFoundError, ValueError) as e:
-                print(f"Warning: {e}")
-                gate_status = "result_not_found"
 
         experiment_results.append({
             "experiment_id":  experiment["experiment_id"],
