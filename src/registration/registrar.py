@@ -18,15 +18,13 @@ import json
 import uuid
 from datetime import datetime, timezone
 
-from database.models import (
+from src.database.models import (
     get_active_gs_version,
     insert_gs_exp_version,
     insert_gs_sample,
     retire_gs_version,
 )
 
-# MVP scaffolding — update when confirmed against actual CSVs
-PRIMARY_METRIC = "UM-01_CountsPer50ul"
 SAMPLE_ID_COLUMN = "SampleID"
 METADATA_ROWS = 4
 
@@ -64,6 +62,11 @@ def register_gold_standard(conn, experiment_id: str, file_path: str,
     NOTE:   Handles wide-format CSVs only (4 metadata rows, one row
             per sample). Long/melted format CSVs (e.g. RnDdata) 
             require pivot preprocessing — see STATUS.md.
+
+    Checksum_hash is stored at registration time as an audit trail
+    and to support a future re-registration guard workflow.
+    It is not read during verification — the database is the source
+    of truth for gold standard values.
     """
     checksum = compute_checksum(file_path)
     rows = read_gold_standard_csv(file_path)
@@ -87,13 +90,11 @@ def register_gold_standard(conn, experiment_id: str, file_path: str,
 
     sample_records = [
         {
-            "gs_sample_id":         str(uuid.uuid4()),
-            "gs_exp_version_id":    gs_exp_version_id,
-            "sample_id":            row[SAMPLE_ID_COLUMN],
-            "primary_metric":       PRIMARY_METRIC,
-            "primary_metric_value": float(row[PRIMARY_METRIC]),
-            "full_metrics":         json.dumps(dict(row)),
-            "notes":                None,
+            "gs_sample_id":      str(uuid.uuid4()),
+            "gs_exp_version_id": gs_exp_version_id,
+            "sample_id":         row[SAMPLE_ID_COLUMN],
+            "full_metrics":      json.dumps(dict(row)),
+            "notes":             None,
         }
         for row in rows
     ]

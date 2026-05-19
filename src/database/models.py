@@ -27,15 +27,13 @@ def insert_gs_exp_version(conn, record: dict) -> str:
 
 
 def insert_gs_sample(conn, record: dict) -> None:
-    """Insert a single gold standard sample expected value."""
+    """Insert a single gold standard sample."""
     conn.execute(
         """
         INSERT INTO gold_standard_samples
-            (gs_sample_id, gs_exp_version_id, sample_id, primary_metric,
-             primary_metric_value, full_metrics, notes)
+            (gs_sample_id, gs_exp_version_id, sample_id, full_metrics, notes)
         VALUES
-            (:gs_sample_id, :gs_exp_version_id, :sample_id, :primary_metric,
-             :primary_metric_value, :full_metrics, :notes)
+            (:gs_sample_id, :gs_exp_version_id, :sample_id, :full_metrics, :notes)
         """,
         record,
     )
@@ -65,20 +63,43 @@ def retire_gs_version(conn, gs_exp_version_id: str, superseded_at: str) -> None:
     )
 
 
+def get_gs_samples(conn, gs_exp_version_id: str) -> list[dict]:
+    """Return all samples for a gold standard experiment version."""
+    rows = conn.execute(
+        """
+        SELECT gs_sample_id, sample_id, full_metrics
+        FROM gold_standard_samples
+        WHERE gs_exp_version_id = ?
+        """,
+        (gs_exp_version_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 # ---------------------------------------------------------------
 # Run tracking
 # ---------------------------------------------------------------
 
+def get_all_processed_run_ids(conn) -> set:
+    """Return the set of all run_ids already recorded in the verification DB."""
+    rows = conn.execute("SELECT run_id FROM runs").fetchall()
+    return {row["run_id"] for row in rows}
+
+
 def insert_run(conn, record: dict) -> None:
     """Insert a new run record."""
-    # TODO: implement
-    pass
-
-
-def get_unprocessed_runs(conn) -> list[dict]:
-    """Return runs that have not yet been picked up by the verification service."""
-    # TODO: implement
-    pass
+    try:
+        conn.execute(
+            """
+            INSERT INTO runs
+                (run_id, triggered_at, pipeline_build, scenario, manifest_path, verdict)
+            VALUES
+                (:run_id, :triggered_at, :pipeline_build, :scenario, :manifest_path, :verdict)
+            """,
+            record,
+        )
+    except Exception as e:
+        raise RuntimeError(f"Failed to insert run '{record['run_id']}': {e}") from e
 
 
 # ---------------------------------------------------------------
@@ -87,14 +108,45 @@ def get_unprocessed_runs(conn) -> list[dict]:
 
 def insert_experiment_result(conn, record: dict) -> str:
     """Insert an experiment result. Returns result_id."""
-    # TODO: implement
-    pass
+    try:
+        conn.execute(
+            """
+            INSERT INTO experiment_results
+                (result_id, run_id, gs_exp_version_id, experiment_id, feature_set,
+                 classification, pre_verify_status, verdict, verified_at)
+            VALUES
+                (:result_id, :run_id, :gs_exp_version_id, :experiment_id, :feature_set,
+                 :classification, :pre_verify_status, :verdict, :verified_at)
+            """,
+            record,
+        )
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to insert experiment result for '{record['experiment_id']}': {e}"
+        ) from e
+    return record["result_id"]
 
 
 def insert_sample_result(conn, record: dict) -> None:
-    """Insert a single sample result."""
-    # TODO: implement
-    pass
+    """Insert a single sample result (one row per sample per metric)."""
+    try:
+        conn.execute(
+            """
+            INSERT INTO sample_results
+                (sample_result_id, result_id, gs_sample_id, sample_id,
+                 metric, comparison_type, actual_value, expected_value,
+                 deviation_percent, verdict, notes)
+            VALUES
+                (:sample_result_id, :result_id, :gs_sample_id, :sample_id,
+                 :metric, :comparison_type, :actual_value, :expected_value,
+                 :deviation_percent, :verdict, :notes)
+            """,
+            record,
+        )
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to insert sample result for '{record['sample_id']}': {e}"
+        ) from e
 
 
 # ---------------------------------------------------------------
@@ -103,5 +155,17 @@ def insert_sample_result(conn, record: dict) -> None:
 
 def insert_report(conn, record: dict) -> None:
     """Insert a report record."""
-    # TODO: implement
-    pass
+    try:
+        conn.execute(
+            """
+            INSERT INTO reports
+                (report_id, run_id, result_id, llm_narrative,
+                 overall_verdict, generated_at, report_json)
+            VALUES
+                (:report_id, :run_id, :result_id, :llm_narrative,
+                 :overall_verdict, :generated_at, :report_json)
+            """,
+            record,
+        )
+    except Exception as e:
+        raise RuntimeError(f"Failed to insert report for run '{record['run_id']}': {e}") from e

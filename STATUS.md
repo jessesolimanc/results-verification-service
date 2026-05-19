@@ -2,8 +2,8 @@
 
 Quick reference for current implementation state. Update this file at the end of every development session.
 
-Last updated: 2026-05-13 (session 3)
-Current phase: Phase 1 — Foundation
+Last updated: 2026-05-18 (session 8)
+Current phase: Phase 2 — Happy path end to end ✅ COMPLETE
 
 ---
 
@@ -17,44 +17,50 @@ Current phase: Phase 1 — Foundation
 | `models.py` | `insert_gs_exp_version()` | ✅ Done | |
 | `models.py` | `insert_gs_sample()` | ✅ Done | |
 | `models.py` | `get_active_gs_version()` | ✅ Done | |
+| `models.py` | `get_gs_samples()` | ✅ Done | Returns list of sample dicts for a gs_exp_version_id |
 | `models.py` | `retire_gs_version()` | ✅ Done | |
-| `models.py` | `insert_run()` | ⬜ Not started | |
-| `models.py` | `get_unprocessed_runs()` | ⬜ Not started | |
-| `models.py` | `insert_experiment_result()` | ⬜ Not started | |
-| `models.py` | `insert_sample_result()` | ⬜ Not started | |
-| `models.py` | `insert_report()` | ⬜ Not started | |
+| `models.py` | `insert_run()` | ✅ Done | |
+| `models.py` | `get_all_processed_run_ids()` | ✅ Done | Replaces get_unprocessed_runs() — NOTIFY/LISTEN push model needs deduplication check, not a poll query |
+| `models.py` | `insert_experiment_result()` | ✅ Done | |
+| `models.py` | `insert_sample_result()` | ✅ Done | |
+| `models.py` | `insert_report()` | ✅ Done | |
 
 ### `src/registration/`
 | File | Function | Status | Notes |
 |---|---|---|---|
-| `registrar.py` | `compute_checksum()` | ✅ Done | |
+| `registrar.py` | `compute_checksum()` | ✅ Done | Reused by gate module |
 | `registrar.py` | `read_gold_standard_csv()` | ✅ Done | Skips 4 metadata rows; wide-format only |
 | `registrar.py` | `register_gold_standard()` | ✅ Done | Atomic transaction; retires previous version if exists |
 
 ### `src/listener/`
 | File | Function | Status | Notes |
 |---|---|---|---|
-| `listener.py` | `get_completed_runs()` | ⬜ Not started | |
-| `listener.py` | `start_listener()` | ⬜ Not started | |
+| `listener.py` | `parse_experiment_notification()` | ✅ Done | Splits on _run_, reconstructs run_id as run_YYYYMMDD_NNN |
+| `listener.py` | `listen_async()` | ✅ Done | asyncpg NOTIFY/LISTEN with retry loop; filters INSERT only |
+| `listener.py` | `listen_async_mock()` | ✅ Done | Fires hardcoded payload, sleeps indefinitely |
 
 ### `src/gate/`
 | File | Function | Status | Notes |
 |---|---|---|---|
-| `gate.py` | `checksum_check()` | ⬜ Not started | |
-| `gate.py` | `subset_check()` | ⬜ Not started | |
-| `gate.py` | `run_gate()` | ⬜ Not started | |
+| `gate.py` | `checksum_check()` | ✅ Done | Delegates to compute_checksum from registrar |
+| `gate.py` | `subset_check()` | 🔲 Stub | Phase 3 |
+| `gate.py` | `run_gate()` | ✅ Done | Returns (bool, status); no_gold_standard / pass. DB is source of truth — checksum_check not called here |
 
 ### `src/orchestrator/`
 | File | Function | Status | Notes |
 |---|---|---|---|
-| `orchestrator.py` | `load_manifest()` | ⬜ Not started | |
-| `orchestrator.py` | `verify_run()` | ⬜ Not started | |
+| `orchestrator.py` | `load_manifest()` | ✅ Done | Constructs path from run_id + config; raises FileNotFoundError if missing |
+| `orchestrator.py` | `find_result_folder()` | ✅ Done | Globs for {exp_id}_{run_id}_* under results_dir; raises on 0 or >1 matches |
+| `orchestrator.py` | `verify_run()` | ✅ Done | Full flow: gate → compare → persist → report |
 
 ### `src/comparator/`
 | File | Function | Status | Notes |
 |---|---|---|---|
-| `comparator.py` | `compare_sample()` | ⬜ Not started | |
-| `comparator.py` | `compare_experiment()` | ⬜ Not started | |
+| `comparator.py` | `compare_experiment()` | ✅ Done | Dispatches to registry; raises ValueError on unknown type |
+| `registry.py` | `COMPARISON_REGISTRY` | ✅ Done | Maps type strings to strategy handlers; count_tolerance wired |
+| `strategies/__init__.py` | — | ✅ Done | Package marker |
+| `strategies/count_tolerance.py` | `compare_sample()` | ✅ Done | Zero expected_value guard; result includes comparison_type and metric fields |
+| `strategies/count_tolerance.py` | `run_count_tolerance()` | ✅ Done | Iterates params["columns"]; one result per (sample, column) |
 
 ### `src/llm/`
 | File | Function | Status | Notes |
@@ -65,9 +71,9 @@ Current phase: Phase 1 — Foundation
 ### `src/reporter/`
 | File | Function | Status | Notes |
 |---|---|---|---|
-| `reporter.py` | `determine_experiment_verdict()` | ⬜ Not started | |
-| `reporter.py` | `determine_run_verdict()` | ⬜ Not started | |
-| `reporter.py` | `write_report()` | ⬜ Not started | |
+| `reporter.py` | `determine_experiment_verdict()` | ✅ Done | Any sample fail → experiment fail |
+| `reporter.py` | `determine_run_verdict()` | ✅ Done | Applies build_verdict_policy; stability fail → fail, exploratory fail → warn |
+| `reporter.py` | `write_report()` | ✅ Done | Writes detail_report.csv + summary_report.csv; stores JSON blob in reports table |
 
 ### `src/main.py`
 | Function | Status | Notes |
@@ -75,7 +81,8 @@ Current phase: Phase 1 — Foundation
 | `load_config()` | ✅ Done | |
 | `init()` | ✅ Done | |
 | `register()` | ✅ Done | |
-| `run()` | ⬜ Not started | |
+| `run()` | ✅ Done | |
+| `run_service()` | ✅ Done | Async loop — accumulates experiments per run_id, calls verify_run() when set is complete |
 
 ---
 
@@ -86,8 +93,11 @@ Current phase: Phase 1 — Foundation
 | Initial schema from DDL | ✅ Applied | |
 | Added `primary_metric`, `primary_metric_value` to `gold_standard_samples` | ✅ Applied | MVP scaffolding — to be dropped once full JSON comparison implemented |
 | Added `full_metrics` JSON column to `gold_standard_samples` | ✅ Applied | |
-| Added `primary_metric`, `actual_value`, `expected_value`, `deviation_percent` to `sample_results` | ✅ Applied | MVP scaffolding |
-| Added `full_actual_metrics`, `full_expected_metrics` JSON columns to `sample_results` | ✅ Applied | |
+| Added `primary_metric`, `actual_value`, `expected_value`, `deviation_percent` to `sample_results` | 🔁 Superseded | Replaced by normalised schema below |
+| Added `full_actual_metrics`, `full_expected_metrics` JSON columns to `sample_results` | 🔁 Superseded | Replaced by normalised schema below |
+| Normalised `sample_results` — one row per (sample, metric); added `metric`, `comparison_type`, `notes`; `deviation_percent` now nullable | ✅ Applied (DDL) | Requires DB re-init and re-registration — see session 7 notes |
+| Added `report_json TEXT NOT NULL DEFAULT ''` to `reports` | ✅ Applied (DDL) | Stores structured JSON for future HTML rendering (ADR-017) |
+| Drop `primary_metric`, `primary_metric_value` scaffold columns from `gold_standard_samples` | ✅ Applied (DDL) | registrar.py updated — PRIMARY_METRIC constant removed, sample records now store full_metrics JSON only |
 
 ---
 
@@ -99,8 +109,22 @@ Current phase: Phase 1 — Foundation
 | Dynamic range experiment — may need curve metric not per-sample tolerance | 🔲 Unresolved |
 | 10-channel experiment — per-channel criteria TBD | 🔲 Unresolved |
 | Image paths for all 5 experiments — pending image transfer to regression machine | 🔲 Unresolved |
-| Primary metric column name per experiment type — how does registrar know which column to use? | ✅ Resolved - Answer: Hardcoded as UM-01_CountsPer50ul for the MVP. This is scaffolding only — will be removed when full JSON blob comparison is implemented. No manifest field needed. |
-| RnDdata CSV uses long/melted format — needs pivot preprocessing before registration. No 4-row metadata header. Not needed for MVP.  | 🔲 Future |
+| Primary metric column name per experiment type — hardcoded as UM-01_CountsPer50ul for MVP | ✅ Resolved |
+| RnDdata CSV uses long/melted format — needs pivot preprocessing. Not needed for MVP. | 🔲 Future |
+| Pipeline DB schema — reports_table_changes NOTIFY channel confirmed. ExperimentId carries full {exp_id}_{run_id}_{timestamp} string | ✅ Resolved |
+| Workbook generator — automates workbook stamping with run_id. Out of scope for MVP, done manually. | 🔲 Future |
+| manifest gold_standard_checksum field is redundant — gate reads checksum from DB. Field can be removed from manifest schema in a future cleanup. | 🔲 Future |
+| PRIMARY_METRIC constant in registrar.py — removed (session 7) | ✅ Resolved |
+| Results folder — currently manually maintained with CSVs dropped in directly. Future implementation requires password-protected unzip step before CSVs are accessible. | 🔲 Future |
+
+---
+
+## Key architectural decisions (recent)
+
+- **Listener changed from polling to PostgreSQL NOTIFY/LISTEN** (ADR-012 supersedes ADR-004)
+- **Mock listener added for dev** — controlled by `listener.use_mock` config flag (ADR-013)
+- **Experiment folder naming** — `{exp_id}_{run_id}_{timestamp}`, test harness does rename at runtime (ADR-014)
+- **run_id is a coordination mechanism only** — base `exp_id` remains the stable longitudinal key in verification DB
 
 ---
 
@@ -115,17 +139,19 @@ Current phase: Phase 1 — Foundation
 - [x] models.py gold standard insert functions
 
 ### Phase 2 — Happy path end to end
-- [ ] Listener (polling loop)
-- [ ] Orchestrator (manifest loading + flow coordination)
-- [ ] Pre-verification gate (checksum check)
-- [ ] Comparator (per-sample comparison)
-- [ ] Reporter (basic structured report, no LLM)
+- [x] models.py remaining insert functions
+- [x] Listener — mock + real (asyncpg)
+- [x] Orchestrator (manifest loading, folder lookup, flow coordination)
+- [x] Pre-verification gate (checksum check)
+- [x] Comparator (per-sample comparison)
+- [x] Reporter (detail + summary CSV, JSON blob in DB)
+- [x] main.py run() wired to asyncio event loop
 
 ### Phase 3 — Harden and complete
 - [ ] Subset validity check in gate
 - [ ] All 5 experiments wired up
 - [ ] LLM narrative module
-- [ ] Edge case handling (aborted runs, missing manifests)
+- [ ] Edge case handling (aborted runs, missing manifests, malformed payloads)
 
 ### Phase 4 — Observability
 - [ ] Longitudinal queries and trend detection
@@ -136,4 +162,29 @@ Current phase: Phase 1 — Foundation
 
 ## Notes
 
-_Use this section for anything that doesn't fit above — unexpected decisions made during implementation, things to discuss next session, gotchas discovered, etc._
+Smoke test end-to-end confirmed (session 8):
+- Phase 2 happy path smoke test passing end-to-end — reports written, DB populated correctly
+- run_gate() signature corrected: now accepts experiment_id: str directly (was experiment: dict)
+- Root cause of blank reports: experiment_id typo in manifest (T087 vs T078) — manifests must match registered experiment_ids exactly
+- All diagnostic prints removed
+
+Reporter + orchestrator + schema redesign (session 7):
+- Reporter implemented: detail_report.csv (one row per sample/metric/experiment), summary_report.csv (one row per feature_set/comparison_type/metric), JSON blob stored in reports table
+- Orchestrator fully implemented: find_result_folder globs for {exp_id}_{run_id}_* under results_dir; verify_run orchestrates gate → compare → DB inserts → write_report
+- verify_run wired into main.py run_service — Phase 2 happy path is now end-to-end
+- sample_results schema redesigned: normalised to one row per (sample, metric); added metric, comparison_type, notes columns; removed flat-value scaffolding and JSON blob columns (ADR-017)
+- report_json added to reports table (ADR-017)
+- DB must be re-initialised and gold standard re-registered before smoke testing (schema changed)
+- gold_standard_samples scaffold columns (primary_metric, primary_metric_value) still present — cleanup tracked in schema status table above
+
+Import audit (session 6):
+- All internal imports across `src/` now use the full `src.` prefix (required for smoke_test.py to resolve modules from project root)
+- Files updated: gate.py, comparator.py, registry.py, count_tolerance.py, registrar.py, main.py
+- Smoke test confirmed working end-to-end
+
+Listener redesign (session 4):
+- Pipeline DB is PostgreSQL with existing NOTIFY triggers on Reports and Workbooks tables
+- reports_table_changes channel fires on INSERT/UPDATE/DELETE with ExperimentId in payload
+- asyncpg added to requirements.txt
+- Full async architecture required — main.py run() uses asyncio.run()
+- Mock listener unblocks development on personal machine without pipeline DB access

@@ -2,20 +2,22 @@
 main.py — entry point for the results verification service.
 
 Usage:
-    python src/main.py --init      Initialise the database
-    python src/main.py --register  Run the gold standard registration tool
-    python src/main.py --run       Start the verification service
+    python -m src.main --init      Initialise the database
+    python -m src.main --register  Run the gold standard registration tool
+    python -m src.main --run       Start the verification service
 """
 
 import argparse
+import asyncio
+import json
 import yaml
 from pathlib import Path
 
-from database.db import (
-    initialise_database,
-    get_connection
-)
-from registration.registrar import register_gold_standard
+from src.database.db import get_connection, initialise_database
+from src.database.models import get_all_processed_run_ids
+from src.listener.listener import listen_async, listen_async_mock, parse_experiment_notification
+from src.orchestrator.orchestrator import load_manifest, verify_run
+from src.registration.registrar import register_gold_standard
 
 
 def load_config() -> dict:
@@ -68,8 +70,56 @@ def register(config: dict) -> None:
 
 def run(config: dict) -> None:
     """Start the verification service listener loop."""
-    # TODO: implement service loop
-    print("Starting verification service...")
+    token = asyncio.Event()
+    asyncio.run(run_service(config, token))
+
+
+async def run_service(config: dict, token: asyncio.Event) -> None:
+    """Async service loop — listens for notifications and coordinates verification."""
+    conn = get_connection(config["paths"]["database"])
+    processed_run_ids = get_all_processed_run_ids(conn)
+    in_progress = {}
+    manifests = {}
+
+    async def handle_notification(payload: str) -> None:
+        data = json.loads(payload)
+        if data.get("op") != "insert":
+            return
+        exp_id, run_id = parse_experiment_notification(data["experimentId"])
+
+        if run_id in processed_run_ids:
+            print(f"Run {run_id} already processed — ignoring")
+            return
+
+        if run_id not in in_progress:
+            try:
+                manifest = load_manifest(run_id, config)
+            except FileNotFoundError as e:
+                print(f"Warning: {e}")
+                return
+            manifests[run_id] = manifest
+            in_progress[run_id] = set()
+
+        # in_progress[run_id].add(exp_id)
+        expected = {exp["experiment_id"] for exp in manifests[run_id]["experiments"]}
+        if exp_id not in expected:
+            print(f"Warning: unexpected experiment {exp_id} for run {run_id} — ignoring")
+            return
+        in_progress[run_id].add(exp_id)
+
+        print(f"Run {run_id}: {len(in_progress[run_id])}/{len(expected)} experiments received")
+
+        if in_progress[run_id] == expected:
+            print(f"Run {run_id}: all experiments received — starting verification")
+            verify_run(conn, config, run_id, manifests[run_id])
+            processed_run_ids.add(run_id)
+            del in_progress[run_id]
+            del manifests[run_id]
+
+    if config["listener"]["use_mock"]:
+        await listen_async_mock(config, handle_notification)
+    else:
+        await listen_async(config, token, handle_notification)
 
 
 if __name__ == "__main__":

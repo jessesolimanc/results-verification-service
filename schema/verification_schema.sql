@@ -32,11 +32,9 @@ CREATE TABLE IF NOT EXISTS gold_standard_exp_versions (
 
 CREATE TABLE IF NOT EXISTS gold_standard_samples (
     gs_sample_id            TEXT    PRIMARY KEY,
-    gs_exp_version_id       TEXT    NOT NULL 
+    gs_exp_version_id       TEXT    NOT NULL
         REFERENCES gold_standard_exp_versions (gs_exp_version_id),
     sample_id               TEXT    NOT NULL,
-    primary_metric          TEXT    NOT NULL,   -- scaffolding for MVP
-    primary_metric_value    REAL    NOT NULL,   -- scaffolding for MVP
     full_metrics            TEXT    NOT NULL,   -- JSON blob, all columns
     notes                   TEXT    DEFAULT NULL
 );
@@ -96,13 +94,14 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE TABLE IF NOT EXISTS experiment_results (
     result_id           TEXT        PRIMARY KEY,
     run_id              TEXT        NOT NULL REFERENCES runs (run_id),
-    gs_exp_version_id   TEXT        NOT NULL REFERENCES gold_standard_exp_versions (gs_exp_version_id),
+    gs_exp_version_id   TEXT        REFERENCES gold_standard_exp_versions (gs_exp_version_id),
+                                                    -- NULL when gate fails with no_gold_standard
     experiment_id       TEXT        NOT NULL,       -- denormalised for convenient querying
     feature_set         TEXT        NOT NULL,
     classification      TEXT        NOT NULL        -- "stability" | "exploratory"
         CHECK (classification IN ('stability', 'exploratory')),
-    pre_verify_status   TEXT        NOT NULL        -- "pass" | "checksum_fail" | "subset_fail"
-        CHECK (pre_verify_status IN ('pass', 'checksum_fail', 'subset_fail')),
+    pre_verify_status   TEXT        NOT NULL
+        CHECK (pre_verify_status IN ('pass', 'checksum_fail', 'subset_fail', 'no_gold_standard', 'result_not_found')),
     verdict             TEXT        NOT NULL        -- "pass" | "fail" | "warn" | "aborted"
         CHECK (verdict IN ('pass', 'fail', 'warn', 'aborted')),
     verified_at         TEXT        NOT NULL        -- ISO-8601
@@ -124,27 +123,27 @@ CREATE INDEX IF NOT EXISTS idx_exp_results_experiment
 -- -------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS sample_results (
-    sample_result_id        TEXT    PRIMARY KEY,
-    result_id               TEXT    NOT NULL 
+    sample_result_id    TEXT    PRIMARY KEY,
+    result_id           TEXT    NOT NULL
         REFERENCES experiment_results (result_id),
-    gs_sample_id            TEXT    NOT NULL 
+    gs_sample_id        TEXT    NOT NULL
         REFERENCES gold_standard_samples (gs_sample_id),
-    sample_id               TEXT    NOT NULL,
-    primary_metric          TEXT    NOT NULL,   -- scaffolding for MVP
-    actual_value            REAL    NOT NULL,   -- scaffolding for MVP
-    expected_value          REAL    NOT NULL,   -- scaffolding for MVP
-    deviation_percent       REAL    NOT NULL,   -- scaffolding for MVP
-    full_actual_metrics     TEXT    NOT NULL,   -- JSON blob
-    full_expected_metrics   TEXT    NOT NULL,   -- JSON blob, snapshot
-    verdict                 TEXT    NOT NULL
-        CHECK (verdict IN ('pass', 'fail'))
+    sample_id           TEXT    NOT NULL,
+    metric              TEXT    NOT NULL,       -- column name e.g. UM-01_CountsPer50ul
+    comparison_type     TEXT    NOT NULL,       -- e.g. count_tolerance
+    actual_value        REAL,                  -- NULL when sample is missing from result CSV
+    expected_value      REAL    NOT NULL,
+    deviation_percent   REAL,                  -- NULL when expected_value is zero
+    verdict             TEXT    NOT NULL
+        CHECK (verdict IN ('pass', 'fail')),
+    notes               TEXT    DEFAULT NULL   -- future LLM annotation per sample result
 );
 
 CREATE INDEX IF NOT EXISTS idx_sample_results_result
     ON sample_results (result_id);
 
 CREATE INDEX IF NOT EXISTS idx_sample_results_sample
-    ON sample_results (sample_id);                 -- longitudinal per-sample queries
+    ON sample_results (sample_id, metric);     -- longitudinal per-(sample, metric) queries
 
 
 -- -------------------------------------------------------------
@@ -159,10 +158,11 @@ CREATE TABLE IF NOT EXISTS reports (
     run_id              TEXT        NOT NULL REFERENCES runs (run_id),
     result_id           TEXT        DEFAULT NULL    -- NULL = run-level report
                                     REFERENCES experiment_results (result_id),
-    llm_narrative       TEXT        NOT NULL,
+    llm_narrative       TEXT        NOT NULL,       -- Phase 3 placeholder
     overall_verdict     TEXT        NOT NULL        -- "pass" | "fail" | "warn"
         CHECK (overall_verdict IN ('pass', 'fail', 'warn')),
-    generated_at        TEXT        NOT NULL        -- ISO-8601
+    generated_at        TEXT        NOT NULL,       -- ISO-8601
+    report_json         TEXT        NOT NULL DEFAULT ''  -- structured JSON blob for future HTML rendering
 );
 
 CREATE INDEX IF NOT EXISTS idx_reports_run
