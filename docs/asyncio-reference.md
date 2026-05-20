@@ -134,26 +134,6 @@ the next poll interval.
 
 ---
 
-## asyncio.Event — the cancellation token
-
-A simple flag that coroutines can check to know when to stop.
-
-```python
-token = asyncio.Event()
-
-# In the listener loop:
-while not token.is_set():
-    ...   # keep running
-
-# From outside, to stop the service:
-token.set()   # all loops checking token.is_set() will exit
-```
-
-Used in the verification service to allow graceful shutdown — the listener
-keeps running until someone calls `token.set()`.
-
----
-
 ## The actual listener pattern
 
 The verification service listener uses asyncpg's native async callback
@@ -228,55 +208,212 @@ calls it. This keeps the listener and orchestrator decoupled.
 
 ## How the verification service uses asyncio
 
+### One event loop, one extra thread
+
+The entire verification service runs on **one event loop**, started by
+`asyncio.run()` in `main.py`. There is no second event loop.
+
+The only extra thread is the `watchdog` observer — a separate OS thread
+that watches the filesystem. It communicates back to the event loop via
+`asyncio.run_coroutine_threadsafe()`. Everything else runs on the single
+event loop, taking turns at each `await`.
+
+```
+ONE event loop (main thread)
+  ├── run_service
+  ├── listen_async
+  ├── _watch_experiment (EXP_1)   ← scheduled by create_task()
+  ├── _watch_experiment (EXP_2)   ← scheduled by create_task()
+  └── watch_and_confirm (EXP_1)   ← awaited by _watch_experiment
+
+watchdog OS thread (separate thread)
+  └── bridges back via run_coroutine_threadsafe()
+```
+
+### `asyncio.create_task()` vs `await`
+
+```python
+# await — sequential, blocks until done
+await some_coroutine()
+
+# create_task — concurrent, schedules and returns immediately
+asyncio.create_task(some_coroutine())
+```
+
+`create_task()` is used in `handle_notification()` to start a
+`_watch_experiment` task without waiting for it. This means
+`handle_notification()` returns immediately and the event loop can
+receive the next notification while the watch runs in the background.
+
+### The full run_service pattern
+
 ```python
 # main.py — entry point
 def run(config: dict) -> None:
     token = asyncio.Event()
-    asyncio.run(run_service(config, token))   # start the event loop
+    asyncio.run(run_service(config, token))   # ONE event loop starts here
 
-# run_service — async entry point
 async def run_service(config: dict, token: asyncio.Event) -> None:
+    conn = get_connection(config["paths"]["database"])
+    processed_run_ids = get_all_processed_run_ids(conn)
+    in_progress = {}       # {run_id: set of exp_ids notified}
+    confirmed_ready = {}   # {run_id: set of exp_ids confirmed on F:}
+    manifests = {}
 
-    # callback — will eventually call the orchestrator
-    async def handle_notification(payload: str):
+    async def handle_notification(payload: str) -> None:
         data = json.loads(payload)
         exp_id, run_id = parse_experiment_notification(data["experimentId"])
-        await orchestrator.verify_run(run_id, exp_id)
 
-    # start the appropriate listener
+        if run_id in processed_run_ids:
+            return
+
+        if run_id not in in_progress:
+            manifest = load_manifest(run_id, config)
+            manifests[run_id] = manifest
+            in_progress[run_id] = set()
+            confirmed_ready[run_id] = set()
+
+        expected = {e["experiment_id"] for e in manifests[run_id]["experiments"]}
+
+        if exp_id not in expected:
+            print(f"Warning: unexpected experiment '{exp_id}' — ignoring")
+            return
+
+        in_progress[run_id].add(exp_id)
+
+        # fire and forget — starts concurrent watch, returns immediately
+        asyncio.create_task(
+            _watch_experiment(exp_id, run_id, expected, ...)
+        )
+        # handle_notification returns HERE without waiting for the watch
+
+    async def _watch_experiment(exp_id, run_id, expected, ...):
+        """Defines callbacks and delegates to watch_and_confirm."""
+
+        async def on_confirmed():
+            confirmed_ready[run_id].add(exp_id)
+            if expected.issubset(confirmed_ready[run_id]):
+                await verify_run(conn, config, run_id, manifests[run_id])
+                processed_run_ids.add(run_id)
+                in_progress.pop(run_id, None)
+                confirmed_ready.pop(run_id, None)
+                manifests.pop(run_id, None)
+
+        async def on_timeout():
+            print(f"Run {run_id}: {exp_id} timed out")
+
+        await watch_and_confirm(exp_id, run_id, config,
+                                on_confirmed, on_timeout)
+
     if config["listener"]["use_mock"]:
         await listen_async_mock(config, handle_notification)
     else:
         await listen_async(config, token, handle_notification)
 ```
 
+**Note on `verify_run`:** declared `async def` because it is called from
+an async context, but does not itself await anything — all database and
+file operations are synchronous. It is `async` purely to satisfy the
+calling context.
+
 ---
 
-## Full notification flow
+## watchdog and asyncio — OS thread boundary
+
+The `watchdog` library runs its filesystem observer in a separate OS
+thread. You cannot call `await` from inside a watchdog callback because
+it runs outside the event loop. The correct bridge is
+`asyncio.run_coroutine_threadsafe()`:
+
+```python
+class ReportDataDeletionHandler(FileSystemEventHandler):
+    def __init__(self, ..., loop, callback):
+        self.loop = loop         # captured from async context before observer starts
+        self.callback = callback # an async coroutine
+
+    def on_deleted(self, event):
+        # running in watchdog's OS thread — cannot await directly
+        asyncio.run_coroutine_threadsafe(
+            self.callback(), self.loop
+        )
+```
+
+The `loop` reference must be captured **before** the observer starts,
+while still in the async context:
+
+```python
+async def watch_and_confirm(...):
+    loop = asyncio.get_event_loop()   # capture here, in async context
+    deletion_event = asyncio.Event()
+
+    async def on_deletion():
+        deletion_event.set()          # this runs on the event loop
+
+    handler = DeletionHandler(..., loop=loop, callback=on_deletion)
+    observer = Observer()
+    observer.start()                  # watchdog OS thread starts here
+
+    await deletion_event.wait()       # event loop free while waiting
+```
+
+**Observer-first pattern:** Always start the observer before checking
+whether the watched condition already exists. This prevents missed
+events — if the deletion occurs between the existence check and the
+observer starting, it would be missed. Starting the observer first
+guarantees any deletion after that point is caught. If the condition
+is already true when you check, set the event manually and proceed.
+
+---
+
+## Full notification flow (with E: drive watch)
 
 ```
 PostgreSQL fires NOTIFY on reports_table_changes
         ↓
-asyncpg receives it and schedules _handler() on the event loop
+asyncpg calls _handler() on the event loop
         ↓
 _handler() checks op == "insert" — ignores updates/deletes
         ↓
-_handler() calls await on_notification(payload)
+await handle_notification(payload)
         ↓
-handle_notification() in run_service runs
+parse_experiment_notification() → exp_id, run_id
         ↓
-parse_experiment_notification() extracts exp_id and run_id
+manifest loaded, in_progress and confirmed_ready initialised
         ↓
-experiment added to in_progress group for this run_id
+asyncio.create_task(_watch_experiment(exp_id, run_id))
+  ← handle_notification returns immediately
+  ← event loop free to receive next notification
         ↓
-if all expected experiments received → orchestrator.verify_run()
+_watch_experiment runs concurrently:
+  defines on_confirmed() and on_timeout()
+  await watch_and_confirm(exp_id, run_id, ...)
+        ↓
+watch_and_confirm:
+  STEP 1: start watchdog observer (OS thread starts)
+  STEP 2: check if E: folder already gone
+    → already gone: set deletion_event manually
+    → still present: wait for watchdog to fire
+  STEP 3: await deletion_event.wait()
+    ← event loop FREE while waiting
+    ← other notifications handled, other watches run concurrently
+        ↓
+E: deletion occurs (watchdog OS thread detects it)
+  run_coroutine_threadsafe(on_deletion(), loop)
+  deletion_event.set()
+  deletion_event.wait() unblocks
+        ↓
+await on_confirmed()
+  confirmed_ready[run_id].add(exp_id)
+  if all expected experiments confirmed:
+    await verify_run()
+    clean up state
         ↓
 listener goes back to waiting...
 ```
 
-Note: if the connection drops at any point, `conn_terminated` is set,
-`asyncio.wait` unblocks, and the outer `while` loop reconnects
-automatically.
+Note: if the DB connection drops at any point, `conn_terminated` is set,
+`asyncio.wait` unblocks, and the outer `while` loop in `listen_async`
+reconnects automatically.
 
 ---
 
@@ -285,13 +422,16 @@ automatically.
 | Pattern | What it does |
 |---|---|
 | `async def f():` | Declares a coroutine |
-| `await f()` | Runs coroutine, pauses until done |
-| `asyncio.run(f())` | Starts event loop and runs coroutine |
-| `asyncio.create_task(f())` | Runs coroutine concurrently |
-| `asyncio.Queue()` | Thread-safe data bridge |
-| `asyncio.Event()` | Cancellation/signalling flag |
+| `await f()` | Runs coroutine, pauses until done — sequential |
+| `asyncio.run(f())` | Starts the ONE event loop and runs coroutine |
+| `asyncio.create_task(f())` | Schedules coroutine concurrently — returns immediately |
+| `asyncio.Queue()` | Coroutine-safe data passing within event loop (not OS-thread-safe) |
+| `asyncio.Event()` | Cancellation/signalling flag between coroutines |
 | `await asyncio.sleep(n)` | Pause for n seconds without blocking |
 | `await asyncio.wait_for(f(), timeout=n)` | Run with a timeout |
+| `await asyncio.wait([...], FIRST_COMPLETED)` | Wait for whichever of N events fires first |
+| `asyncio.run_coroutine_threadsafe(f(), loop)` | Schedule coroutine from an OS thread onto the event loop |
+| `loop = asyncio.get_event_loop()` | Capture loop reference for use in OS threads |
 
 ---
 
@@ -322,5 +462,6 @@ function — use `await` instead.
 
 ## Further reading
 
-- Python docs: https://docs.python.org/3/library/asyncio.html
+- Python asyncio docs: https://docs.python.org/3/library/asyncio.html
 - asyncpg docs: https://magicstack.github.io/asyncpg/current/
+- watchdog docs: https://python-watchdog.readthedocs.io/en/stable/
