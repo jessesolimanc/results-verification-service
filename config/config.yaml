@@ -11,7 +11,14 @@ paths:
   workbooks_dir:      "F:/RegressionTesting/workbooks"
   database:           "F:/RegressionTesting/verification.db"
   reports_dir:        "F:/RegressionTesting/reports"
-  results_dir:        "F:/CountableLabs/Data"
+  results_dir:        "F:/CountableLabs/data"
+
+  # E: drive — pipeline temporary storage (ADR-019)
+  e_drive_report_data: "E:/CountableLabs/ReportData"
+  e_drive_metafolder:  "E:/CountableLabs/Data/metafolder"  # future use
+
+  # F: drive — archival storage (what we read from)
+  metadata_dir:        "F:/CountableLabs/metadata"          # future use
 
 pipeline:
   # Connection string for the central pipeline database
@@ -30,6 +37,8 @@ listener:
 verification:
   # Default tolerance used when no experiment-specific tolerance is set
   default_tolerance_percent: 10.0
+  # Seconds to wait for E: drive deletion before aborting the watch (ADR-019)
+  e_drive_deletion_timeout_seconds: 600
 
 llm:
   # Anthropic model to use for report generation

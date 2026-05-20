@@ -17,6 +17,7 @@ from src.database.db import get_connection, initialise_database
 from src.database.models import get_all_processed_run_ids
 from src.listener.listener import listen_async, listen_async_mock, parse_experiment_notification
 from src.orchestrator.orchestrator import load_manifest, verify_run
+from src.orchestrator.watcher import watch_and_confirm
 from src.registration.registrar import register_gold_standard
 
 
@@ -78,14 +79,16 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
     """Async service loop — listens for notifications and coordinates verification."""
     conn = get_connection(config["paths"]["database"])
     processed_run_ids = get_all_processed_run_ids(conn)
-    in_progress = {}
+    in_progress = {}       # {run_id: set of exp_ids notified}
+    confirmed_ready = {}   # {run_id: set of exp_ids confirmed on F:}
     manifests = {}
 
     async def handle_notification(payload: str) -> None:
         data = json.loads(payload)
-        if data.get("op") != "insert":
+        result = parse_experiment_notification(data.get("experimentId", ""))
+        if result is None:
             return
-        exp_id, run_id = parse_experiment_notification(data["experimentId"])
+        exp_id, run_id = result
 
         if run_id in processed_run_ids:
             print(f"Run {run_id} already processed — ignoring")
@@ -99,22 +102,52 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
                 return
             manifests[run_id] = manifest
             in_progress[run_id] = set()
+            confirmed_ready[run_id] = set()
 
-        # in_progress[run_id].add(exp_id)
-        expected = {exp["experiment_id"] for exp in manifests[run_id]["experiments"]}
+        expected = {e["experiment_id"] for e in manifests[run_id]["experiments"]}
+
         if exp_id not in expected:
-            print(f"Warning: unexpected experiment {exp_id} for run {run_id} — ignoring")
+            print(f"Warning: unexpected experiment '{exp_id}' "
+                  f"for run '{run_id}' — ignoring")
             return
+
         in_progress[run_id].add(exp_id)
+        print(f"Run {run_id}: notification received for {exp_id}")
 
-        print(f"Run {run_id}: {len(in_progress[run_id])}/{len(expected)} experiments received")
+        asyncio.create_task(
+            _watch_experiment(exp_id, run_id, expected, config,
+                              conn, manifests, confirmed_ready,
+                              processed_run_ids, in_progress)
+        )
 
-        if in_progress[run_id] == expected:
-            print(f"Run {run_id}: all experiments received — starting verification")
-            verify_run(conn, config, run_id, manifests[run_id])
-            processed_run_ids.add(run_id)
-            del in_progress[run_id]
-            del manifests[run_id]
+    async def _watch_experiment(exp_id, run_id, expected, config,
+                                conn, manifests, confirmed_ready,
+                                processed_run_ids, in_progress):
+        """Watch E: for this experiment and trigger verify_run when all ready."""
+
+        async def on_confirmed():
+            if run_id not in confirmed_ready:
+                return
+            confirmed_ready[run_id].add(exp_id)
+            print(f"Run {run_id}: {len(confirmed_ready[run_id])}/"
+                  f"{len(expected)} experiments confirmed on F:")
+
+            if expected.issubset(confirmed_ready[run_id]):
+                print(f"Run {run_id}: all experiments confirmed — "
+                      f"starting verification")
+                await asyncio.to_thread(
+                    verify_run, conn, config, run_id, manifests[run_id]
+                )
+                processed_run_ids.add(run_id)
+                in_progress.pop(run_id, None)
+                confirmed_ready.pop(run_id, None)
+                manifests.pop(run_id, None)
+
+        async def on_timeout():
+            print(f"Run {run_id}: experiment {exp_id} timed out — "
+                  f"run will not be verified")
+
+        await watch_and_confirm(exp_id, run_id, config, on_confirmed, on_timeout)
 
     if config["listener"]["use_mock"]:
         await listen_async_mock(config, handle_notification)

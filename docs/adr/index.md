@@ -21,3 +21,6 @@ Architecture Decision Records for the results verification service.
 | [ADR-015](ADR-015-decoupled-entry-point.md) | Decoupled entry point to support future test generator | Accepted |
 | [ADR-016](ADR-016-comparison-registry.md) | Strategy pattern for extensible comparison registry | Accepted |
 | [ADR-017](ADR-017-report-structure.md) | Report structure, output format, and multi-column comparisons | Accepted |
+| [ADR-018](ADR-018-pipeline-health-vision.md) | Evolution toward pipeline health monitoring | Accepted — future direction, out of current OKR scope |
+| [ADR-019](ADR-019-e-drive-deletion-watch.md) | E: drive deletion watch as pipeline completion signal | Accepted |
+| [ADR-020](ADR-020-metafolder-deferred.md) | Metafolder timing and RnDdata access — deferred | Accepted — deferred beyond current OKR scope |

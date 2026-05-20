@@ -17,11 +17,17 @@ CHANNEL = "reports_table_changes"
 RETRY_DELAY_SECONDS = 5
 
 
-def parse_experiment_notification(experiment_id_field: str) -> tuple[str, str]:
-    """Split {exp_id}_run_{YYYYMMDD}_{NNN}_{timestamp} into (exp_id, run_id)."""
-    exp_id, tail = experiment_id_field.split("_run_", 1)
-    run_id = "_".join(["run"] + tail.split("_")[:2])
-    return exp_id, run_id
+def parse_experiment_notification(experiment_id_field: str) -> tuple[str, str] | None:
+    """Split {exp_id}_run_{YYYYMMDD}_{NNN}_{timestamp} into (exp_id, run_id).
+
+    Returns None if the field is missing or does not match the expected format.
+    """
+    try:
+        exp_id, tail = experiment_id_field.split("_run_", 1)
+        run_id = "_".join(["run"] + tail.split("_")[:2])
+        return exp_id, run_id
+    except (ValueError, AttributeError):
+        return None
 
 
 async def listen_async_mock(config: dict, on_notification) -> None:
