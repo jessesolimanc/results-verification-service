@@ -2,7 +2,7 @@
 
 Quick reference for current implementation state. Update this file at the end of every development session.
 
-Last updated: 2026-05-18 (session 8)
+Last updated: 2026-05-20 (session 9)
 Current phase: Phase 2 — Happy path end to end ✅ COMPLETE
 
 ---
@@ -36,7 +36,7 @@ Current phase: Phase 2 — Happy path end to end ✅ COMPLETE
 | File | Function | Status | Notes |
 |---|---|---|---|
 | `listener.py` | `parse_experiment_notification()` | ✅ Done | Splits on _run_, reconstructs run_id as run_YYYYMMDD_NNN |
-| `listener.py` | `listen_async()` | ✅ Done | asyncpg NOTIFY/LISTEN with retry loop; filters INSERT only |
+| `listener.py` | `listen_async()` | ✅ Done | asyncpg NOTIFY/LISTEN with retry loop; waits on shutdown token OR connection termination — dropped connections now trigger reconnect |
 | `listener.py` | `listen_async_mock()` | ✅ Done | Fires hardcoded payload, sleeps indefinitely |
 
 ### `src/gate/`
@@ -59,7 +59,7 @@ Current phase: Phase 2 — Happy path end to end ✅ COMPLETE
 | `comparator.py` | `compare_experiment()` | ✅ Done | Dispatches to registry; raises ValueError on unknown type |
 | `registry.py` | `COMPARISON_REGISTRY` | ✅ Done | Maps type strings to strategy handlers; count_tolerance wired |
 | `strategies/__init__.py` | — | ✅ Done | Package marker |
-| `strategies/count_tolerance.py` | `compare_sample()` | ✅ Done | Zero expected_value guard; result includes comparison_type and metric fields |
+| `strategies/count_tolerance.py` | `compare_sample()` | ✅ Done | Zero/zero → pass (deviation 0.0); zero expected, non-zero actual → fail; result includes comparison_type and metric fields |
 | `strategies/count_tolerance.py` | `run_count_tolerance()` | ✅ Done | Iterates params["columns"]; one result per (sample, column) |
 
 ### `src/llm/`
@@ -72,7 +72,7 @@ Current phase: Phase 2 — Happy path end to end ✅ COMPLETE
 | File | Function | Status | Notes |
 |---|---|---|---|
 | `reporter.py` | `determine_experiment_verdict()` | ✅ Done | Any sample fail → experiment fail |
-| `reporter.py` | `determine_run_verdict()` | ✅ Done | Applies build_verdict_policy; stability fail → fail, exploratory fail → warn |
+| `reporter.py` | `determine_run_verdict()` | ✅ Done | Now reads and validates build_verdict_policy fields; raises ValueError on unsupported rule or on_exploratory_failure values |
 | `reporter.py` | `write_report()` | ✅ Done | Writes detail_report.csv + summary_report.csv; stores JSON blob in reports table |
 
 ### `src/main.py`
@@ -98,6 +98,9 @@ Current phase: Phase 2 — Happy path end to end ✅ COMPLETE
 | Normalised `sample_results` — one row per (sample, metric); added `metric`, `comparison_type`, `notes`; `deviation_percent` now nullable | ✅ Applied (DDL) | Requires DB re-init and re-registration — see session 7 notes |
 | Added `report_json TEXT NOT NULL DEFAULT ''` to `reports` | ✅ Applied (DDL) | Stores structured JSON for future HTML rendering (ADR-017) |
 | Drop `primary_metric`, `primary_metric_value` scaffold columns from `gold_standard_samples` | ✅ Applied (DDL) | registrar.py updated — PRIMARY_METRIC constant removed, sample records now store full_metrics JSON only |
+| `sample_results.actual_value` made nullable | ✅ Applied (DDL) | Missing-sample rows now stored as auditable fail records; orchestrator no longer skips them |
+| `experiment_results.gs_exp_version_id` made nullable | ✅ Applied (DDL) | Gate failures (no_gold_standard) now get a DB record with NULL FK |
+| `experiment_results.pre_verify_status` CHECK expanded | ✅ Applied (DDL) | Added `no_gold_standard` and `result_not_found` as valid statuses |
 
 ---
 
@@ -161,6 +164,18 @@ Current phase: Phase 2 — Happy path end to end ✅ COMPLETE
 ---
 
 ## Notes
+
+PR hardening — correctness and robustness fixes (session 9):
+- actual_value made nullable in sample_results — missing-sample rows now persisted as auditable fail records (removed orchestrator skip guard)
+- gs_exp_version_id made nullable in experiment_results — gate failures now get a DB record (verdict: aborted) instead of being silently dropped
+- pre_verify_status CHECK expanded: no_gold_standard and result_not_found added
+- Experiments with comparison=None now always get an experiment_results row; sample inserts remain guarded
+- listen_async() reconnect fixed: asyncio.wait on shutdown token AND conn_terminated event — dropped connections now trigger retry loop instead of leaving service idle
+- generated_at in reporter changed from datetime.utcnow() to datetime.now(timezone.utc) — consistent with rest of codebase
+- determine_run_verdict() now reads and validates build_verdict_policy fields; raises ValueError on unsupported values
+- count_tolerance zero/zero case fixed: both expected and actual zero → pass with deviation_percent=0.0 (was incorrectly failing)
+- Orchestrator try/except split: find_result_folder guarded separately from compare_experiment — comparator ValueErrors now propagate as real failures instead of being swallowed as result_not_found
+- DB re-init required to pick up sample_results and experiment_results schema changes
 
 Smoke test end-to-end confirmed (session 8):
 - Phase 2 happy path smoke test passing end-to-end — reports written, DB populated correctly
