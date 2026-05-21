@@ -10,24 +10,32 @@ Use listen_async() in production.
 
 import asyncio
 import json
+import re
 
 import asyncpg
 
 CHANNEL = "reports_table_changes"
 RETRY_DELAY_SECONDS = 5
 
+# Matches: {exp_id}_run_{YYYYMMDD}_{NNN}_{anything}
+# Captures exp_id, 8-digit date, and 3-digit sequence number.
+_NOTIFICATION_RE = re.compile(
+    r"^(?P<exp_id>.+)_run_(?P<date>\d{8})_(?P<seq>\d{3})_"
+)
+
 
 def parse_experiment_notification(experiment_id_field: str) -> tuple[str, str] | None:
     """Split {exp_id}_run_{YYYYMMDD}_{NNN}_{timestamp} into (exp_id, run_id).
 
-    Returns None if the field is missing or does not match the expected format.
+    Returns None if the field is absent or does not match the expected format
+    (requires an 8-digit date and 3-digit sequence number after _run_).
     """
-    try:
-        exp_id, tail = experiment_id_field.split("_run_", 1)
-        run_id = "_".join(["run"] + tail.split("_")[:2])
-        return exp_id, run_id
-    except (ValueError, AttributeError):
+    if not experiment_id_field:
         return None
+    m = _NOTIFICATION_RE.match(experiment_id_field)
+    if not m:
+        return None
+    return m.group("exp_id"), f"run_{m.group('date')}_{m.group('seq')}"
 
 
 async def listen_async_mock(config: dict, on_notification) -> None:
