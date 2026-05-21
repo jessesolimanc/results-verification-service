@@ -144,8 +144,13 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
                 manifests.pop(run_id, None)
 
         async def on_timeout():
+            if run_id not in confirmed_ready:
+                return  # another experiment already triggered cleanup for this run
             print(f"Run {run_id}: experiment {exp_id} timed out — "
                   f"run will not be verified")
+            in_progress.pop(run_id, None)
+            confirmed_ready.pop(run_id, None)
+            manifests.pop(run_id, None)
 
         await watch_and_confirm(exp_id, run_id, config, on_confirmed, on_timeout)
 
