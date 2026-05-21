@@ -77,8 +77,8 @@ def run(config: dict) -> None:
 
 async def run_service(config: dict, token: asyncio.Event) -> None:
     """Async service loop — listens for notifications and coordinates verification."""
-    conn = get_connection(config["paths"]["database"])
-    processed_run_ids = get_all_processed_run_ids(conn)
+    with get_connection(config["paths"]["database"]) as conn:
+        processed_run_ids = get_all_processed_run_ids(conn)
     in_progress = {}       # {run_id: set of exp_ids notified}
     confirmed_ready = {}   # {run_id: set of exp_ids confirmed on F:}
     manifests = {}
@@ -116,12 +116,12 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
 
         asyncio.create_task(
             _watch_experiment(exp_id, run_id, expected, config,
-                              conn, manifests, confirmed_ready,
+                              manifests, confirmed_ready,
                               processed_run_ids, in_progress)
         )
 
     async def _watch_experiment(exp_id, run_id, expected, config,
-                                conn, manifests, confirmed_ready,
+                                manifests, confirmed_ready,
                                 processed_run_ids, in_progress):
         """Watch E: for this experiment and trigger verify_run when all ready."""
 
@@ -136,7 +136,7 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
                 print(f"Run {run_id}: all experiments confirmed — "
                       f"starting verification")
                 await asyncio.to_thread(
-                    verify_run, conn, config, run_id, manifests[run_id]
+                    verify_run, config, run_id, manifests[run_id]
                 )
                 processed_run_ids.add(run_id)
                 in_progress.pop(run_id, None)

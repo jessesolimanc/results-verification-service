@@ -38,6 +38,6 @@ with conn:
     conn.execute("DELETE FROM experiment_results WHERE run_id = ?", (run_id,))
     conn.execute("DELETE FROM runs WHERE run_id = ?", (run_id,))
 
-verify_run(conn, config, run_id, manifest)
-
 conn.close()
+
+verify_run(config, run_id, manifest)
