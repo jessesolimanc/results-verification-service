@@ -2,8 +2,8 @@
 
 Quick reference for current implementation state. Update this file at the end of every development session.
 
-Last updated: 2026-05-20 (session 9)
-Current phase: Phase 2 — Happy path end to end ✅ COMPLETE
+Last updated: 2026-05-21 (session 11)
+Current phase: MVP feature complete — PR review hardening
 
 ---
 
@@ -35,7 +35,7 @@ Current phase: Phase 2 — Happy path end to end ✅ COMPLETE
 ### `src/listener/`
 | File | Function | Status | Notes |
 |---|---|---|---|
-| `listener.py` | `parse_experiment_notification()` | ✅ Done | Splits on _run_, reconstructs run_id as run_YYYYMMDD_NNN |
+| `listener.py` | `parse_experiment_notification()` | ✅ Done | Regex-validated: requires 8-digit date + 3-digit seq after _run_; returns None on any malformed input |
 | `listener.py` | `listen_async()` | ✅ Done | asyncpg NOTIFY/LISTEN with retry loop; waits on shutdown token OR connection termination — dropped connections now trigger reconnect |
 | `listener.py` | `listen_async_mock()` | ✅ Done | Fires hardcoded payload, sleeps indefinitely |
 
@@ -52,6 +52,9 @@ Current phase: Phase 2 — Happy path end to end ✅ COMPLETE
 | `orchestrator.py` | `load_manifest()` | ✅ Done | Constructs path from run_id + config; raises FileNotFoundError if missing |
 | `orchestrator.py` | `find_result_folder()` | ✅ Done | Globs for {exp_id}_{run_id}_* under results_dir; raises on 0 or >1 matches |
 | `orchestrator.py` | `verify_run()` | ✅ Done | Full flow: gate → compare → persist → report |
+| `watcher.py` | `ReportDataDeletionHandler` | ✅ Done | watchdog event handler; bridges OS thread to asyncio via run_coroutine_threadsafe; fired guard prevents double-trigger |
+| `watcher.py` | `wait_for_e_drive_deletion()` | ✅ Done | Starts observer first, then pre-checks — closes race window; timeout from config; uses get_running_loop(); observer.join() via asyncio.to_thread |
+| `watcher.py` | `watch_and_confirm()` | ✅ Done | Dispatches to on_confirmed / on_timeout callbacks |
 
 ### `src/comparator/`
 | File | Function | Status | Notes |
@@ -82,7 +85,7 @@ Current phase: Phase 2 — Happy path end to end ✅ COMPLETE
 | `init()` | ✅ Done | |
 | `register()` | ✅ Done | |
 | `run()` | ✅ Done | |
-| `run_service()` | ✅ Done | Async loop — accumulates experiments per run_id, calls verify_run() when set is complete |
+| `run_service()` | ✅ Done | Async loop — spawns watch_and_confirm task per experiment; verify_run fires via asyncio.to_thread when confirmed_ready ⊇ expected; on_timeout() cleans up run state |
 
 ---
 
@@ -128,6 +131,7 @@ Current phase: Phase 2 — Happy path end to end ✅ COMPLETE
 - **Mock listener added for dev** — controlled by `listener.use_mock` config flag (ADR-013)
 - **Experiment folder naming** — `{exp_id}_{run_id}_{timestamp}`, test harness does rename at runtime (ADR-014)
 - **run_id is a coordination mechanism only** — base `exp_id` remains the stable longitudinal key in verification DB
+- **E: drive deletion watch as pipeline completion signal** — NOTIFY fires before F: copy is complete; watching E: for folder deletion is the safe trigger (ADR-019)
 
 ---
 
@@ -141,7 +145,7 @@ Current phase: Phase 2 — Happy path end to end ✅ COMPLETE
 - [x] Gold standard registration tool
 - [x] models.py gold standard insert functions
 
-### Phase 2 — Happy path end to end
+### Phase 2 — Happy path end to end ✅ COMPLETE
 - [x] models.py remaining insert functions
 - [x] Listener — mock + real (asyncpg)
 - [x] Orchestrator (manifest loading, folder lookup, flow coordination)
@@ -149,6 +153,7 @@ Current phase: Phase 2 — Happy path end to end ✅ COMPLETE
 - [x] Comparator (per-sample comparison)
 - [x] Reporter (detail + summary CSV, JSON blob in DB)
 - [x] main.py run() wired to asyncio event loop
+- [x] E: drive deletion watcher (ADR-019) — race condition safe, per-experiment concurrent tasks
 
 ### Phase 3 — Harden and complete
 - [ ] Subset validity check in gate
@@ -164,6 +169,27 @@ Current phase: Phase 2 — Happy path end to end ✅ COMPLETE
 ---
 
 ## Notes
+
+PR review hardening — async correctness + docs (session 11):
+- verify_run now owns its DB connection (created inside asyncio.to_thread worker) — fixes SQLite check_same_thread error
+- conn removed from _watch_experiment signature and asyncio.create_task call — verify_run no longer needs it passed in
+- run_service startup connection scoped tightly: open, query get_all_processed_run_ids, close immediately
+- smoke_test.py: conn closed before verify_run call (cleanup and verification now use separate connections)
+- on_timeout() now cleans up in_progress/confirmed_ready/manifests; guarded so only first timeout per run triggers cleanup
+- get_event_loop() → get_running_loop() in watcher.py — explicit and deprecation-safe
+- observer.join() moved to asyncio.to_thread — no longer blocks event loop during observer shutdown
+- parse_experiment_notification rewritten with compiled regex (_NOTIFICATION_RE) — validates 8-digit date + 3-digit seq; malformed payloads return None reliably
+- asyncio-reference.md updated: verify_run note corrected (sync def, not async def); parse_experiment_notification examples updated with None guard; get_event_loop → get_running_loop throughout; verify_run call pattern updated to asyncio.to_thread in all examples
+
+E: drive watcher + MVP feature complete (session 10):
+- watcher.py created: ReportDataDeletionHandler, wait_for_e_drive_deletion, watch_and_confirm
+- Race condition handled: observer starts before pre-check — no window where a deletion can be missed
+- run_service() redesigned: confirmed_ready dict tracks F: copy status per experiment; verify_run fires only when all experiments confirmed; asyncio.to_thread keeps event loop unblocked during sync verification
+- parse_experiment_notification() now returns None on malformed input — handle_notification guards against it
+- watchdog==6.0.0 added to requirements.txt
+- config.yaml and local_config.yaml: duplicate results_dir keys removed; e_drive_deletion_timeout_seconds: 600 added to verification block
+- local_config.yaml to be retired when dev machine is set up as production replica (no more mock listener needed)
+- MVP is feature complete — dev machine setup with pipeline DB is the next prerequisite before end-to-end live testing
 
 PR hardening — correctness and robustness fixes (session 9):
 - actual_value made nullable in sample_results — missing-sample rows now persisted as auditable fail records (removed orchestrator skip guard)

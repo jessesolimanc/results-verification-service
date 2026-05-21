@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from src.comparator.comparator import compare_experiment
+from src.database.db import get_connection
 from src.database.models import insert_experiment_result, insert_run, insert_sample_result
 from src.gate.gate import run_gate
 from src.reporter.reporter import (
@@ -68,14 +69,19 @@ def find_result_folder(exp_id: str, run_id: str, config: dict) -> Path:
     return matches[0]
 
 
-def verify_run(conn, config: dict, run_id: str, manifest: dict) -> None:
+def verify_run(config: dict, run_id: str, manifest: dict) -> None:
     """
     Full verification flow for a single run.
+
+    Opens its own DB connection so it is safe to call from a worker
+    thread (e.g. via asyncio.to_thread) without hitting SQLite's
+    check_same_thread restriction.
 
     Coordinates gate, comparator, and reporter modules. All results are
     written to the verification database and CSV reports are written to
     {reports_dir}/{run_id}/.
     """
+    conn = get_connection(config["paths"]["database"])
     policy = manifest["build_verdict_policy"]
     now = datetime.now(timezone.utc).isoformat()
     manifest_path = str(
@@ -169,4 +175,5 @@ def verify_run(conn, config: dict, run_id: str, manifest: dict) -> None:
                 })
 
     write_report(conn, config, run_id, experiment_results, run_verdict)
+    conn.close()
     print(f"Run {run_id} complete — verdict: {run_verdict}")
