@@ -61,7 +61,7 @@ async def wait_for_e_drive_deletion(exp_id: str, run_id: str,
     watch_dir = config["paths"]["e_drive_report_data"]
     timeout_seconds = config["verification"]["e_drive_deletion_timeout_seconds"]
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     deletion_event = asyncio.Event()
 
     async def on_deletion():
@@ -90,7 +90,7 @@ async def wait_for_e_drive_deletion(exp_id: str, run_id: str,
         return False
     finally:
         observer.stop()
-        observer.join()
+        await asyncio.to_thread(observer.join)
 
 
 async def watch_and_confirm(exp_id: str, run_id: str, config: dict,
