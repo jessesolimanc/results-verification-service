@@ -1,7 +1,7 @@
 """
 watcher.py — E: drive deletion watch for pipeline completion signal.
 
-Watches E:\CountableLabs\ReportData for deletion of a specific
+Watches E:/CountableLabs/ReportData for deletion of a specific
 experiment folder. Deletion signals that the F: drive copy is complete
 and it is safe to read result files.
 
@@ -48,13 +48,15 @@ async def wait_for_e_drive_deletion(exp_id: str, run_id: str,
     Wait for the experiment folder to be deleted from E: drive,
     signalling that the F: drive copy is complete.
 
-    Pre-checks whether the folder is already absent before starting the
-    observer — handles the race where deletion occurred between the DB
-    NOTIFY and this function being called. The NOTIFY is the anchor: if
-    the folder is already gone, the copy is confirmed complete.
+    Starts the observer first, then checks whether the folder is already
+    absent — this eliminates the race window between checking and
+    watching if deletion occurred between the DB NOTIFY and this function
+    being called. The NOTIFY is the anchor: if the folder is already
+    gone once the observer is live, the copy is confirmed complete.
 
-    Returns True if folder was absent on entry or deletion detected within
-    the configured timeout. Returns False if timeout elapsed.
+    Returns True if folder was absent when checked after observer startup
+    or deletion was detected within the configured timeout. Returns False
+    if timeout elapsed.
     """
     watch_dir = config["paths"]["e_drive_report_data"]
     timeout_seconds = config["verification"]["e_drive_deletion_timeout_seconds"]
