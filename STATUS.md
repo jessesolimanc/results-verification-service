@@ -2,8 +2,8 @@
 
 Quick reference for current implementation state. Update this file at the end of every development session.
 
-Last updated: 2026-05-20 (session 10)
-Current phase: MVP feature complete — entering Phase 3
+Last updated: 2026-05-21 (session 11)
+Current phase: MVP feature complete — PR review hardening
 
 ---
 
@@ -35,7 +35,7 @@ Current phase: MVP feature complete — entering Phase 3
 ### `src/listener/`
 | File | Function | Status | Notes |
 |---|---|---|---|
-| `listener.py` | `parse_experiment_notification()` | ✅ Done | Splits on _run_, reconstructs run_id as run_YYYYMMDD_NNN; returns None on malformed input |
+| `listener.py` | `parse_experiment_notification()` | ✅ Done | Regex-validated: requires 8-digit date + 3-digit seq after _run_; returns None on any malformed input |
 | `listener.py` | `listen_async()` | ✅ Done | asyncpg NOTIFY/LISTEN with retry loop; waits on shutdown token OR connection termination — dropped connections now trigger reconnect |
 | `listener.py` | `listen_async_mock()` | ✅ Done | Fires hardcoded payload, sleeps indefinitely |
 
@@ -53,7 +53,7 @@ Current phase: MVP feature complete — entering Phase 3
 | `orchestrator.py` | `find_result_folder()` | ✅ Done | Globs for {exp_id}_{run_id}_* under results_dir; raises on 0 or >1 matches |
 | `orchestrator.py` | `verify_run()` | ✅ Done | Full flow: gate → compare → persist → report |
 | `watcher.py` | `ReportDataDeletionHandler` | ✅ Done | watchdog event handler; bridges OS thread to asyncio via run_coroutine_threadsafe; fired guard prevents double-trigger |
-| `watcher.py` | `wait_for_e_drive_deletion()` | ✅ Done | Starts observer first, then pre-checks — closes race window; timeout from config |
+| `watcher.py` | `wait_for_e_drive_deletion()` | ✅ Done | Starts observer first, then pre-checks — closes race window; timeout from config; uses get_running_loop(); observer.join() via asyncio.to_thread |
 | `watcher.py` | `watch_and_confirm()` | ✅ Done | Dispatches to on_confirmed / on_timeout callbacks |
 
 ### `src/comparator/`
@@ -85,7 +85,7 @@ Current phase: MVP feature complete — entering Phase 3
 | `init()` | ✅ Done | |
 | `register()` | ✅ Done | |
 | `run()` | ✅ Done | |
-| `run_service()` | ✅ Done | Async loop — spawns watch_and_confirm task per experiment; verify_run fires via asyncio.to_thread when confirmed_ready ⊇ expected |
+| `run_service()` | ✅ Done | Async loop — spawns watch_and_confirm task per experiment; verify_run fires via asyncio.to_thread when confirmed_ready ⊇ expected; on_timeout() cleans up run state |
 
 ---
 
@@ -169,6 +169,17 @@ Current phase: MVP feature complete — entering Phase 3
 ---
 
 ## Notes
+
+PR review hardening — async correctness + docs (session 11):
+- verify_run now owns its DB connection (created inside asyncio.to_thread worker) — fixes SQLite check_same_thread error
+- conn removed from _watch_experiment signature and asyncio.create_task call — verify_run no longer needs it passed in
+- run_service startup connection scoped tightly: open, query get_all_processed_run_ids, close immediately
+- smoke_test.py: conn closed before verify_run call (cleanup and verification now use separate connections)
+- on_timeout() now cleans up in_progress/confirmed_ready/manifests; guarded so only first timeout per run triggers cleanup
+- get_event_loop() → get_running_loop() in watcher.py — explicit and deprecation-safe
+- observer.join() moved to asyncio.to_thread — no longer blocks event loop during observer shutdown
+- parse_experiment_notification rewritten with compiled regex (_NOTIFICATION_RE) — validates 8-digit date + 3-digit seq; malformed payloads return None reliably
+- asyncio-reference.md updated: verify_run note corrected (sync def, not async def); parse_experiment_notification examples updated with None guard; get_event_loop → get_running_loop throughout; verify_run call pattern updated to asyncio.to_thread in all examples
 
 E: drive watcher + MVP feature complete (session 10):
 - watcher.py created: ReportDataDeletionHandler, wait_for_e_drive_deletion, watch_and_confirm

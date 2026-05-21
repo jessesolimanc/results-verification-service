@@ -262,7 +262,10 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
 
     async def handle_notification(payload: str) -> None:
         data = json.loads(payload)
-        exp_id, run_id = parse_experiment_notification(data["experimentId"])
+        result = parse_experiment_notification(data.get("experimentId", ""))
+        if result is None:
+            return   # malformed or missing experimentId — discard
+        exp_id, run_id = result
 
         if run_id in processed_run_ids:
             return
@@ -293,7 +296,7 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
         async def on_confirmed():
             confirmed_ready[run_id].add(exp_id)
             if expected.issubset(confirmed_ready[run_id]):
-                await verify_run(conn, config, run_id, manifests[run_id])
+                await asyncio.to_thread(verify_run, config, run_id, manifests[run_id])
                 processed_run_ids.add(run_id)
                 in_progress.pop(run_id, None)
                 confirmed_ready.pop(run_id, None)
@@ -311,10 +314,12 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
         await listen_async(config, token, handle_notification)
 ```
 
-**Note on `verify_run`:** declared `async def` because it is called from
-an async context, but does not itself await anything — all database and
-file operations are synchronous. It is `async` purely to satisfy the
-calling context.
+**Note on `verify_run`:** a regular synchronous `def`, not `async def`.
+All its internal operations (SQLite writes, file I/O) are synchronous and
+have no awaitable equivalents to use. It is run via
+`asyncio.to_thread(verify_run, ...)` so the event loop is not blocked
+while it executes. Making it `async def` would only matter if it
+internally used `await` — it does not.
 
 ---
 
@@ -343,7 +348,7 @@ while still in the async context:
 
 ```python
 async def watch_and_confirm(...):
-    loop = asyncio.get_event_loop()   # capture here, in async context
+    loop = asyncio.get_running_loop()  # capture here, in async context
     deletion_event = asyncio.Event()
 
     async def on_deletion():
@@ -376,7 +381,7 @@ _handler() checks op == "insert" — ignores updates/deletes
         ↓
 await handle_notification(payload)
         ↓
-parse_experiment_notification() → exp_id, run_id
+parse_experiment_notification() → (exp_id, run_id) or None (malformed — discarded)
         ↓
 manifest loaded, in_progress and confirmed_ready initialised
         ↓
@@ -405,7 +410,7 @@ E: deletion occurs (watchdog OS thread detects it)
 await on_confirmed()
   confirmed_ready[run_id].add(exp_id)
   if all expected experiments confirmed:
-    await verify_run()
+    await asyncio.to_thread(verify_run, config, run_id, manifests[run_id])
     clean up state
         ↓
 listener goes back to waiting...
@@ -431,7 +436,7 @@ reconnects automatically.
 | `await asyncio.wait_for(f(), timeout=n)` | Run with a timeout |
 | `await asyncio.wait([...], FIRST_COMPLETED)` | Wait for whichever of N events fires first |
 | `asyncio.run_coroutine_threadsafe(f(), loop)` | Schedule coroutine from an OS thread onto the event loop |
-| `loop = asyncio.get_event_loop()` | Capture loop reference for use in OS threads |
+| `loop = asyncio.get_running_loop()` | Capture the currently running loop for use in OS threads |
 
 ---
 
