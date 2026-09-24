@@ -24,3 +24,4 @@ Architecture Decision Records for the results verification service.
 | [ADR-018](ADR-018-pipeline-health-vision.md) | Evolution toward pipeline health monitoring | Accepted — future direction, out of current OKR scope |
 | [ADR-019](ADR-019-e-drive-deletion-watch.md) | E: drive deletion watch as pipeline completion signal | Accepted |
 | [ADR-020](ADR-020-metafolder-deferred.md) | Metafolder timing and RnDdata access — deferred | Accepted — deferred beyond current OKR scope |
+| [ADR-021](ADR-021-comparison-scope-and-aggregate-strategies.md) | Comparison registry extension: sample vs aggregate scope | Proposed — rough shaping, not required for current OKR scope |

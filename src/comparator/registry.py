@@ -9,9 +9,11 @@ See ADR-016 for the reasoning behind this pattern.
 """
 
 from src.comparator.strategies.count_tolerance import run_count_tolerance
+from src.comparator.strategies.hybrid_tolerance import run_hybrid_tolerance
 
 COMPARISON_REGISTRY = {
     "count_tolerance": run_count_tolerance,
+    "hybrid_tolerance": run_hybrid_tolerance,
     # future entries:
     # "file_exists":       run_file_exists,
     # "correlation":       run_correlation,

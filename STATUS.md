@@ -2,8 +2,8 @@
 
 Quick reference for current implementation state. Update this file at the end of every development session.
 
-Last updated: 2026-05-21 (session 11)
-Current phase: MVP feature complete — PR review hardening
+Last updated: 2026-09-24 (session 12)
+Current phase: MVP feature complete — hardening comparator + shaping gold standards for new build regression baseline
 
 ---
 
@@ -64,6 +64,8 @@ Current phase: MVP feature complete — PR review hardening
 | `strategies/__init__.py` | — | ✅ Done | Package marker |
 | `strategies/count_tolerance.py` | `compare_sample()` | ✅ Done | Zero/zero → pass (deviation 0.0); zero expected, non-zero actual → fail; result includes comparison_type and metric fields |
 | `strategies/count_tolerance.py` | `run_count_tolerance()` | ✅ Done | Iterates params["columns"]; one result per (sample, column) |
+| `strategies/hybrid_tolerance.py` | `compare_sample_hybrid()` | ✅ Done | expected_value < count_threshold -> absolute tolerance; else percent tolerance |
+| `strategies/hybrid_tolerance.py` | `run_hybrid_tolerance()` | ✅ Done | Same shape as run_count_tolerance; registered in COMPARISON_REGISTRY (session 12) |
 
 ### `src/llm/`
 | File | Function | Status | Notes |
@@ -122,6 +124,8 @@ Current phase: MVP feature complete — PR review hardening
 | manifest gold_standard_checksum field is redundant — gate reads checksum from DB. Field can be removed from manifest schema in a future cleanup. | 🔲 Future |
 | PRIMARY_METRIC constant in registrar.py — removed (session 7) | ✅ Resolved |
 | Results folder — currently manually maintained with CSVs dropped in directly. Future implementation requires password-protected unzip step before CSVs are accessible. | 🔲 Future |
+| count_tolerance strategy only supports percent deviation — a standalone absolute-difference mode is needed for near-zero-count comparisons (e.g. linkage combos). Near-term gap, not yet implemented. | 🔲 Unresolved |
+| Comparator scope extension (sample vs aggregate strategies, for linkage hybrid tolerance / dynamic range trend / grouped-sample comparisons) — shaped in ADR-021. Deferred until after data team philosophy discussion. | 🔲 Future |
 
 ---
 
@@ -169,6 +173,15 @@ Current phase: MVP feature complete — PR review hardening
 ---
 
 ## Notes
+
+Hybrid tolerance strategy + ADR-021 (session 12):
+- Added src/comparator/strategies/hybrid_tolerance.py: run_hybrid_tolerance()/compare_sample_hybrid() — same sample-scope shape as count_tolerance, but expected_value < count_threshold uses absolute tolerance instead of percent (percent deviation is meaningless near zero, e.g. low-count linkage combos)
+- Registered as "hybrid_tolerance" in COMPARISON_REGISTRY — additive, count_tolerance untouched
+- Zero-expected-value case now falls out naturally from the absolute branch — no special-casing needed, unlike count_tolerance's explicit zero/zero guard
+- deviation_percent is None on absolute-mode rows; the absolute deviation and which mode was used are recorded in the notes field instead — no schema change needed, sample_results used as-is
+- tests/test_hybrid_tolerance.py added — 9 cases covering percent mode, absolute mode, the threshold boundary, zero-value edge cases, and missing-sample handling; verified passing (pytest not runnable from this session's shell — verified by executing the test functions directly against a stdlib-only Python)
+- ADR-021 drafted (Proposed, rough shaping — not required for current OKR scope): generalizes this pattern as "sample-scope" strategies vs a future "aggregate-scope" family (grouped-sample and whole-experiment trend comparisons, e.g. dynamic range linearity/%CV) for later, once linkage/dynamic-range criteria are defined with the data team
+- Two gold standards pending registration for the new build regression baseline: T078_run3 (baseline_algo_performance, re-registration — will retire the existing May 18 v1) and MP47b_Adverum_02 (new registration; likely the linkage-feature experiment based on its accompanying CountableLinkageSummary_beta.csv output) — feature_set/classification for MP47b_Adverum_02 still TBD
 
 PR review hardening — async correctness + docs (session 11):
 - verify_run now owns its DB connection (created inside asyncio.to_thread worker) — fixes SQLite check_same_thread error
