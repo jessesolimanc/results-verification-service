@@ -121,7 +121,7 @@ Current phase: MVP feature complete — hardening comparator + shaping gold stan
 | RnDdata CSV uses long/melted format — needs pivot preprocessing. Not needed for MVP. | 🔲 Future |
 | Pipeline DB schema — reports_table_changes NOTIFY channel confirmed. ExperimentId carries full {exp_id}_{run_id}_{timestamp} string | ✅ Resolved |
 | Workbook generator — automates workbook stamping with run_id. Out of scope for MVP, done manually. | 🔲 Future |
-| manifest gold_standard_checksum field is redundant — gate reads checksum from DB. Field can be removed from manifest schema in a future cleanup. | 🔲 Future |
+| manifest gold_standard_checksum field is redundant — gate reads checksum from DB. Removed from manifest-schema.md and from the run_20260924_001 manifest (session 12); gold_standard_ref removed alongside it, same reasoning. | ✅ Resolved |
 | PRIMARY_METRIC constant in registrar.py — removed (session 7) | ✅ Resolved |
 | Results folder — currently manually maintained with CSVs dropped in directly. Future implementation requires password-protected unzip step before CSVs are accessible. | 🔲 Future |
 | count_tolerance strategy only supports percent deviation — a standalone absolute-difference mode is needed for near-zero-count comparisons (e.g. linkage combos). Near-term gap, not yet implemented. | 🔲 Unresolved |
