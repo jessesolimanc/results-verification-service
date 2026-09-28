@@ -22,6 +22,12 @@ from src.orchestrator.watcher import watch_and_confirm
 from src.orchestrator.manifest_watcher import watch_manifests_dir
 from src.registration.registrar import register_gold_standard
 
+# Manifest read retry: watchdog's on_created/on_moved can fire before a
+# writer has finished flushing the file (or mid-rename on some
+# filesystems). Retry with backoff rather than giving up on the first
+# read — see ADR-022 / Copilot review, ticket for manifest_watcher.py.
+MANIFEST_READ_RETRY_DELAYS = (0.1, 0.2, 0.4, 0.8, 1.6)
+
 
 def load_config() -> dict:
     """Load configuration from local_config.yaml if it exists, else config.yaml."""
@@ -90,6 +96,13 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
         stream. Each notification's experiment_id is looked up against
         what's expected — a plain dictionary lookup, replacing the old
         approach of trying to parse a run_id out of the payload itself.
+
+    The manifest watcher's initial catch-up scan must finish before the
+    listener starts consuming notifications: otherwise a notification for
+    a manifest that's already sitting in manifests_dir at startup can
+    arrive (or, for the mock listener, fire immediately) before that
+    manifest has been registered, and gets dropped as "no pending
+    manifest". manifest_watcher_ready is the barrier for that.
     """
     with get_connection(config["paths"]["database"]) as conn:
         processed_run_ids = get_all_processed_run_ids(conn)
@@ -104,8 +117,10 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
     manifests_dir = Path(config["paths"]["manifests_dir"])
     processed_dir = manifests_dir / "processed"
     timed_out_dir = manifests_dir / "timed_out"
-    processed_dir.mkdir(exist_ok=True)
-    timed_out_dir.mkdir(exist_ok=True)
+    failed_dir = manifests_dir / "failed"
+    processed_dir.mkdir(parents=True, exist_ok=True)
+    timed_out_dir.mkdir(parents=True, exist_ok=True)
+    failed_dir.mkdir(parents=True, exist_ok=True)
 
     def _archive(run_id: str, destination: Path) -> None:
         """Drop a finished run's in-memory state and move its manifest aside."""
@@ -128,11 +143,25 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
                 print(f"Warning: could not archive manifest {path}: {e}")
 
     async def handle_new_manifest(path: Path) -> None:
-        """Register a manifest's experiments as soon as the file appears."""
-        try:
-            manifest = json.loads(path.read_text())
-        except (json.JSONDecodeError, OSError) as e:
-            print(f"Warning: could not read manifest {path}: {e}")
+        """Register a manifest's experiments as soon as the file appears.
+
+        Retries the read with backoff: a filesystem event can fire before
+        the writer has finished flushing (or mid atomic-rename), so a
+        JSONDecodeError or a transient OSError on the first attempt
+        doesn't necessarily mean the manifest is bad.
+        """
+        manifest = None
+        last_error = None
+        for delay in MANIFEST_READ_RETRY_DELAYS:
+            try:
+                manifest = json.loads(path.read_text())
+                break
+            except (json.JSONDecodeError, OSError) as e:
+                last_error = e
+                await asyncio.sleep(delay)
+        else:
+            print(f"Warning: could not read manifest {path} after "
+                  f"{len(MANIFEST_READ_RETRY_DELAYS)} attempts: {last_error}")
             return
 
         run_id = manifest["run"]["run_id"]
@@ -147,9 +176,12 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
             conflicting_runs = sorted({expected_experiment_to_run[c] for c in conflicts})
             print(f"Warning: manifest {path.name} (run {run_id}) declares "
                   f"experiment(s) {sorted(conflicts)} already pending under "
-                  f"run(s) {conflicting_runs} — registering anyway. This usually "
-                  f"means a prior run never finished and its manifest was never "
-                  f"archived.")
+                  f"run(s) {conflicting_runs} — skipping registration. This "
+                  f"usually means a prior run never finished and its manifest "
+                  f"was never archived. Resolve the stuck run (or move its "
+                  f"manifest out of {path.parent}) and re-drop this manifest "
+                  f"to retry.")
+            return
 
         manifests[run_id] = manifest
         manifest_paths[run_id] = path
@@ -182,9 +214,9 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
         experiment_names[run_id][exp_id] = name
         print(f"Run {run_id}: notification received for {exp_id} (name={name!r})")
 
-        asyncio.create_task(_watch_experiment(exp_id, run_id, expected, config))
+        asyncio.create_task(_watch_experiment(exp_id, run_id, name, expected, config))
 
-    async def _watch_experiment(exp_id, run_id, expected, config):
+    async def _watch_experiment(exp_id, run_id, name, expected, config):
         """Watch E: for this experiment and trigger verify_run when all ready."""
 
         async def on_confirmed():
@@ -197,11 +229,24 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
             if expected.issubset(confirmed_ready[run_id]):
                 print(f"Run {run_id}: all experiments confirmed — "
                       f"starting verification")
-                await asyncio.to_thread(
-                    verify_run, config, run_id, manifests[run_id], experiment_names[run_id]
-                )
-                processed_run_ids.add(run_id)
-                _archive(run_id, processed_dir)
+                # The manifest is only archived to processed/ once
+                # verify_run() succeeds (see except branch below), so this
+                # is a true prediction of where it will live — that's what
+                # gets recorded in runs.manifest_path.
+                manifest_record_path = str(processed_dir / manifest_paths[run_id].name)
+                try:
+                    await asyncio.to_thread(
+                        verify_run, config, run_id, manifests[run_id],
+                        experiment_names[run_id], manifest_record_path,
+                    )
+                except Exception as e:
+                    print(f"Error: verification failed for run {run_id}: "
+                          f"{e!r} — archiving manifest to {failed_dir} and "
+                          f"freeing state so later runs aren't blocked")
+                    _archive(run_id, failed_dir)
+                else:
+                    processed_run_ids.add(run_id)
+                    _archive(run_id, processed_dir)
 
         async def on_timeout():
             if run_id not in confirmed_ready:
@@ -210,11 +255,13 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
                   f"run will not be verified")
             _archive(run_id, timed_out_dir)
 
-        await watch_and_confirm(exp_id, run_id, config, on_confirmed, on_timeout)
+        await watch_and_confirm(exp_id, run_id, name, config, on_confirmed, on_timeout)
 
+    manifest_watcher_ready = asyncio.Event()
     manifest_watch_task = asyncio.create_task(
-        watch_manifests_dir(config, handle_new_manifest)
+        watch_manifests_dir(config, handle_new_manifest, manifest_watcher_ready)
     )
+    await manifest_watcher_ready.wait()
 
     try:
         if config["listener"]["use_mock"]:

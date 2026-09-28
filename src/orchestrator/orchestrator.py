@@ -78,7 +78,8 @@ def find_result_folder(name: str, config: dict) -> Path:
 
 
 def verify_run(config: dict, run_id: str, manifest: dict,
-                experiment_names: dict[str, str]) -> None:
+                experiment_names: dict[str, str],
+                manifest_record_path: str) -> None:
     """
     Full verification flow for a single run.
 
@@ -91,6 +92,15 @@ def verify_run(config: dict, run_id: str, manifest: dict,
     collected live as notifications arrive — the manifest itself has no
     way to know this ahead of time.
 
+    manifest_record_path is the path to store in runs.manifest_path. The
+    caller (main.py) is responsible for passing the manifest's *eventual*
+    location, not its current one: this function is only invoked once all
+    of a run's experiments are confirmed ready, immediately before the
+    caller archives the manifest into processed/, so the caller passes
+    the destination path it is about to move the file to. Recomputing the
+    path from manifests_dir + run_id here would record a location that
+    stops existing the moment archiving happens.
+
     Coordinates gate, comparator, and reporter modules. All results are
     written to the verification database and CSV reports are written to
     {reports_dir}/{run_id}/.
@@ -98,9 +108,7 @@ def verify_run(config: dict, run_id: str, manifest: dict,
     conn = get_connection(config["paths"]["database"])
     policy = manifest["build_verdict_policy"]
     now = datetime.now(timezone.utc).isoformat()
-    manifest_path = str(
-        Path(config["paths"]["manifests_dir"]) / f"context_manifest_{run_id}.json"
-    )
+    manifest_path = manifest_record_path
 
     experiment_results = []
 

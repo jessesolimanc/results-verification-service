@@ -108,17 +108,77 @@ having no way to know it was even possible.
   a visible warning instead of returning silently — this alone would have
   surfaced session 14's incident immediately instead of after a full lost
   weekend.
-- Manifests are archived (moved to `processed/` or `timed_out/`) once
-  their run concludes on the verification-service side. The harness's own
-  `LoadManifests()` still never archives — a related but separate gap,
-  tracked as a follow-up, not fixed by this change.
-- An unhandled exception inside a run's verification flow can still crash
-  the whole service (observed session 14) — graceful per-run error
-  isolation is tracked as an open design question, not addressed here.
+- Manifests are archived (moved to `processed/`, `timed_out/`, or
+  `failed/`) once their run concludes on the verification-service side.
+  The harness's own `LoadManifests()` still never archives — a related
+  but separate gap, tracked as a follow-up, not fixed by this change.
+- ~~An unhandled exception inside a run's verification flow can still
+  crash the whole service (observed session 14) — graceful per-run error
+  isolation is tracked as an open design question, not addressed here.~~
+  **Resolved (session 14, PR review):** see Addendum below.
 - `result_file_suffix` (a related but separate manifest field, addressing
   which output CSV to read for a given experiment type) was added the
   same session — see `manifest-schema.md`. It is out of this ADR's scope,
   since it addresses a different problem than run correlation.
+
+## Addendum (session 14, GitHub Copilot PR review)
+
+A round of PR review on this ADR's implementation surfaced six further
+gaps, all fixed the same session:
+
+- **`watcher.py` still keyed off the superseded `{exp_id}_{run_id}_*`
+  convention.** The E: drive deletion watch (`ReportDataDeletionHandler`,
+  `wait_for_e_drive_deletion`, `watch_and_confirm`) matched folders by
+  `{exp_id}_{run_id}_*` — exactly the naming convention this ADR
+  established never actually existed on the pipeline side. In practice
+  this meant the pre-check glob almost always matched zero folders,
+  treated the folder as "already absent," and returned `True` immediately
+  — skipping the real wait for the F: copy to complete on nearly every
+  run. Fixed by matching on the pipeline's own timestamped `name` (the
+  same value `find_result_folder()` already uses on F:) instead.
+- **No exception boundary around `verify_run()`.** This is the crash
+  observed live during session 14. `on_confirmed()` in `main.py` now
+  wraps the `asyncio.to_thread(verify_run, ...)` call in try/except: on
+  failure the run's manifest is archived to a new `manifests_dir/failed/`
+  subfolder and its in-memory state is freed via the existing `_archive()`
+  helper, so one run's failure no longer takes down the service or blocks
+  later runs.
+- **`runs.manifest_path` went stale after archiving.** `verify_run()`
+  computed the manifest's path from `manifests_dir` + `run_id`, but the
+  file is moved into `processed/` immediately after `verify_run()`
+  returns. `verify_run()` now takes an explicit `manifest_record_path`
+  argument — the caller passes the path the manifest is *about* to be
+  archived to, so the DB always records where the file actually ends up.
+- **No readiness barrier before the listener starts.** `watch_manifests_dir()`
+  now accepts an optional `ready_event`, set once its startup catch-up
+  scan completes; `run_service()` awaits it before starting the NOTIFY
+  listener, closing the startup race where a manifest already on disk
+  could be missed by a notification (or, for the mock listener, its
+  immediate callback) arriving before that manifest was registered.
+- **Collision handling overwrote instead of rejecting.** `handle_new_manifest()`
+  previously warned on a detected `experiment_id` collision between two
+  pending manifests but still registered the new one anyway, silently
+  reassigning that experiment_id to the new run. It now skips registering
+  the conflicting manifest entirely, leaving the earlier run's mapping
+  intact until it's resolved.
+- **`manifest_watcher.py` missed atomic rename hand-offs and partial
+  writes.** `ManifestCreatedHandler` now also handles `on_moved` (an
+  atomic temp-file rename into `manifests_dir` fires this event, not
+  `on_created`), and `handle_new_manifest()` retries the JSON read with
+  backoff (5 attempts, up to ~3s total) to tolerate a file being read
+  before its writer has finished flushing.
+
+Also fixed as a consequence of the above: `scratch/smoke_test.py`'s call
+to `verify_run()` updated to pass `experiment_names` and
+`manifest_record_path`, matching the signature change from earlier this
+session.
+
+The `watcher.py` name-based matching fix rests on an assumption not yet
+directly verified against a live E: drive folder: that the pipeline names
+the E: drive folder identically to the F: result folder (both by its own
+`name` field). This held for `find_result_folder()` on F: but should be
+confirmed against a real E: drive folder on the next live run.
+
 
 ## Alternatives considered
 - Fix `parse_experiment_notification()` to match the harness's actual
