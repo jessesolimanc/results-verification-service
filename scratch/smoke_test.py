@@ -40,4 +40,15 @@ with conn:
 
 conn.close()
 
-verify_run(config, run_id, manifest)
+# experiment_names would normally be collected live from NOTIFY payloads
+# as they arrive; for a smoke test we don't have real notifications, so
+# fall back to each experiment_id itself as a stand-in "name" — fine as
+# long as your local results_dir has a folder actually named that way.
+experiment_names = {e["experiment_id"]: e["experiment_id"] for e in manifest["experiments"]}
+
+# In the real service this is computed as processed_dir / manifest's
+# current filename (see main.py); here we just point it at the manifest's
+# current location since this script doesn't archive anything.
+manifest_record_path = str(manifest_path)
+
+verify_run(config, run_id, manifest, experiment_names, manifest_record_path)

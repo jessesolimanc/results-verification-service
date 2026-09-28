@@ -41,41 +41,65 @@ def load_manifest(run_id: str, config: dict) -> dict:
         return json.load(f)
 
 
-def find_result_folder(exp_id: str, run_id: str, config: dict) -> Path:
+def find_result_folder(name: str, config: dict) -> Path:
     """
-    Locate the pipeline result folder for a given experiment and run.
+    Locate the pipeline result folder for a given experiment execution.
 
-    Globs for {exp_id}_{run_id}_* under results_dir.
-    Always returns exactly one match — run_id uniqueness guarantees this.
+    Globs for {name}* under results_dir, where `name` is the exact
+    timestamped identifier the pipeline itself assigned to this execution
+    (e.g. "JS221N_serial_titration_PSF_260925_1416") — the same string
+    carried in the Reports table's Name column and in the "name" field of
+    the pipeline's NOTIFY payload. This is the pipeline's own folder-naming
+    convention; it has no notion of the verification service's run_id at
+    all, so `name` must be supplied by the caller (collected from the live
+    notification), not reconstructed from experiment_id + run_id.
+
+    Always returns exactly one match — the pipeline's name is unique per
+    experiment execution.
 
     NOTE: Currently assumes CSVs are manually placed in the results folder.
     Future implementation will include a password-protected unzip step
     before this lookup — see STATUS.md open design questions.
     """
     results_dir = Path(config["paths"]["results_dir"])
-    matches = list(results_dir.glob(f"{exp_id}_{run_id}_*"))
+    matches = list(results_dir.glob(f"{name}*"))
 
     if len(matches) == 0:
         raise FileNotFoundError(
-            f"No result folder found for experiment '{exp_id}' / run '{run_id}' "
-            f"under {results_dir}. "
-            f"Expected a folder matching '{exp_id}_{run_id}_*'."
+            f"No result folder found for '{name}' under {results_dir}. "
+            f"Expected a folder matching '{name}*'."
         )
     if len(matches) > 1:
         raise ValueError(
-            f"Multiple result folders found for '{exp_id}' / '{run_id}' — "
+            f"Multiple result folders found for '{name}' — "
             f"expected exactly one: {[str(m) for m in matches]}"
         )
     return matches[0]
 
 
-def verify_run(config: dict, run_id: str, manifest: dict) -> None:
+def verify_run(config: dict, run_id: str, manifest: dict,
+                experiment_names: dict[str, str],
+                manifest_record_path: str) -> None:
     """
     Full verification flow for a single run.
 
     Opens its own DB connection so it is safe to call from a worker
     thread (e.g. via asyncio.to_thread) without hitting SQLite's
     check_same_thread restriction.
+
+    experiment_names maps experiment_id -> the pipeline's own timestamped
+    name for that execution (from the notification's "name" field),
+    collected live as notifications arrive — the manifest itself has no
+    way to know this ahead of time.
+
+    manifest_record_path is the path to store in runs.manifest_path. The
+    caller (main.py) is responsible for passing the manifest's *eventual*
+    location, not its current one: this function is only invoked once all
+    of a run's experiments are confirmed ready, immediately before the
+    caller archives the manifest into processed/, so the caller passes
+    the destination path it is about to move the file to. Recomputing the
+    path from manifests_dir + run_id here would record a location that
+    stops existing the moment archiving happens.
 
     Coordinates gate, comparator, and reporter modules. All results are
     written to the verification database and CSV reports are written to
@@ -84,9 +108,7 @@ def verify_run(config: dict, run_id: str, manifest: dict) -> None:
     conn = get_connection(config["paths"]["database"])
     policy = manifest["build_verdict_policy"]
     now = datetime.now(timezone.utc).isoformat()
-    manifest_path = str(
-        Path(config["paths"]["manifests_dir"]) / f"context_manifest_{run_id}.json"
-    )
+    manifest_path = manifest_record_path
 
     experiment_results = []
 
@@ -97,13 +119,26 @@ def verify_run(config: dict, run_id: str, manifest: dict) -> None:
 
         if gate_passed:
             try:
-                result_folder = find_result_folder(
-                    experiment["experiment_id"], run_id, config
-                )
-                result_csvs = list(result_folder.glob("*CountableDataSummary.csv"))
+                name = experiment_names.get(experiment["experiment_id"])
+                if not name:
+                    raise FileNotFoundError(
+                        f"No pipeline report name recorded for experiment "
+                        f"'{experiment['experiment_id']}' in run '{run_id}' — "
+                        f"was a notification ever received for it?"
+                    )
+                result_folder = find_result_folder(name, config)
+
+                # Different experiment types produce differently-named output
+                # CSVs from the same result folder (e.g. a linkage experiment's
+                # LinkageSummary.csv vs. the default CountableDataSummary.csv).
+                # The manifest declares which one this experiment expects;
+                # default to CountableDataSummary.csv for experiments that
+                # don't set it, since that's the original/common case.
+                file_suffix = experiment.get("result_file_suffix", "CountableDataSummary.csv")
+                result_csvs = list(result_folder.glob(f"*{file_suffix}"))
                 if not result_csvs:
                     raise FileNotFoundError(
-                        f"No CountableDataSummary.csv found in {result_folder}"
+                        f"No file matching '*{file_suffix}' found in {result_folder}"
                     )
             except (FileNotFoundError, ValueError) as e:
                 print(f"Warning: {e}")
