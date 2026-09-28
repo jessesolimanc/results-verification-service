@@ -17,7 +17,7 @@ Architecture Decision Records for the results verification service.
 | [ADR-011](ADR-011-json-blob-metrics.md) | JSON blob storage for sample metrics | Accepted |
 | [ADR-012](ADR-012-postgres-notify-listener.md) | PostgreSQL NOTIFY/LISTEN for event-driven listener | Accepted |
 | [ADR-013](ADR-013-mock-listener.md) | Mock listener for development and testing | Accepted |
-| [ADR-014](ADR-014-experiment-naming-convention.md) | Experiment folder naming convention and run_id stamping | Accepted |
+| [ADR-014](ADR-014-experiment-naming-convention.md) | Experiment folder naming convention and run_id stamping | ~~Superseded by ADR-022~~ |
 | [ADR-015](ADR-015-decoupled-entry-point.md) | Decoupled entry point to support future test generator | Accepted |
 | [ADR-016](ADR-016-comparison-registry.md) | Strategy pattern for extensible comparison registry | Accepted |
 | [ADR-017](ADR-017-report-structure.md) | Report structure, output format, and multi-column comparisons | Accepted |
@@ -25,3 +25,4 @@ Architecture Decision Records for the results verification service.
 | [ADR-019](ADR-019-e-drive-deletion-watch.md) | E: drive deletion watch as pipeline completion signal | Accepted |
 | [ADR-020](ADR-020-metafolder-deferred.md) | Metafolder timing and RnDdata access — deferred | Accepted — deferred beyond current OKR scope |
 | [ADR-021](ADR-021-comparison-scope-and-aggregate-strategies.md) | Comparison registry extension: sample vs aggregate scope | Proposed — rough shaping, not required for current OKR scope |
+| [ADR-022](ADR-022-explicit-manifest-handoff.md) | Explicit manifest hand-off replaces run_id stamping for run correlation | Accepted |

@@ -1,41 +1,26 @@
 """
 listener.py — PostgreSQL NOTIFY/LISTEN listener for the verification service.
 
-Listens on the reports_table_changes channel. When a notification arrives,
-calls the on_notification callback with the raw JSON payload string.
+Listens on the reports_table_changes channel. When an insert notification
+arrives, calls the on_notification callback with the raw JSON payload
+string (which the caller is responsible for parsing).
 
 Use listen_async_mock() during development (no pipeline DB required).
 Use listen_async() in production.
+
+Note: correlating a notification's experiment_id to a run_id is NOT done
+here — see main.py's expected_experiment_to_run, which is built by
+watching manifests_dir directly (the explicit hand-off). This module's
+only job is delivering a raw payload for each insert.
 """
 
 import asyncio
 import json
-import re
 
 import asyncpg
 
 CHANNEL = "reports_table_changes"
 RETRY_DELAY_SECONDS = 5
-
-# Matches: {exp_id}_run_{YYYYMMDD}_{NNN}_{anything}
-# Captures exp_id, 8-digit date, and 3-digit sequence number.
-_NOTIFICATION_RE = re.compile(
-    r"^(?P<exp_id>.+)_run_(?P<date>\d{8})_(?P<seq>\d{3})_"
-)
-
-
-def parse_experiment_notification(experiment_id_field: str) -> tuple[str, str] | None:
-    """Split {exp_id}_run_{YYYYMMDD}_{NNN}_{timestamp} into (exp_id, run_id).
-
-    Returns None if the field is absent or does not match the expected format
-    (requires an 8-digit date and 3-digit sequence number after _run_).
-    """
-    if not experiment_id_field:
-        return None
-    m = _NOTIFICATION_RE.match(experiment_id_field)
-    if not m:
-        return None
-    return m.group("exp_id"), f"run_{m.group('date')}_{m.group('seq')}"
 
 
 async def listen_async_mock(config: dict, on_notification) -> None:
@@ -43,8 +28,8 @@ async def listen_async_mock(config: dict, on_notification) -> None:
     payload = {
         "schema": "public",
         "op": "insert",
-        "experimentId": "T087_run3_compressed_1_run_20260514_001_20260514_1504",
-        "name": "mock_report",
+        "experimentId": "T087_run3_compressed_1",
+        "name": "T087_run3_compressed_1_260514_1504",
         "user": "mock_user",
     }
     await on_notification(json.dumps(payload))

@@ -2,8 +2,8 @@
 
 Quick reference for current implementation state. Update this file at the end of every development session.
 
-Last updated: 2026-09-24 (session 12)
-Current phase: MVP feature complete — hardening comparator + shaping gold standards for new build regression baseline
+Last updated: 2026-09-28 (session 14)
+Current phase: Phase 3 hardening — first live end-to-end Reanalysis run against the real harness, run-correlation redesign (ADR-022)
 
 ---
 
@@ -35,8 +35,7 @@ Current phase: MVP feature complete — hardening comparator + shaping gold stan
 ### `src/listener/`
 | File | Function | Status | Notes |
 |---|---|---|---|
-| `listener.py` | `parse_experiment_notification()` | ✅ Done | Regex-validated: requires 8-digit date + 3-digit seq after _run_; returns None on any malformed input |
-| `listener.py` | `listen_async()` | ✅ Done | asyncpg NOTIFY/LISTEN with retry loop; waits on shutdown token OR connection termination — dropped connections now trigger reconnect |
+| `listener.py` | `listen_async()` | ✅ Done | asyncpg NOTIFY/LISTEN with retry loop; waits on shutdown token OR connection termination — dropped connections now trigger reconnect. No longer does experiment_id/run_id parsing — see ADR-022 |
 | `listener.py` | `listen_async_mock()` | ✅ Done | Fires hardcoded payload, sleeps indefinitely |
 
 ### `src/gate/`
@@ -50,8 +49,9 @@ Current phase: MVP feature complete — hardening comparator + shaping gold stan
 | File | Function | Status | Notes |
 |---|---|---|---|
 | `orchestrator.py` | `load_manifest()` | ✅ Done | Constructs path from run_id + config; raises FileNotFoundError if missing |
-| `orchestrator.py` | `find_result_folder()` | ✅ Done | Globs for {exp_id}_{run_id}_* under results_dir; raises on 0 or >1 matches |
-| `orchestrator.py` | `verify_run()` | ✅ Done | Full flow: gate → compare → persist → report |
+| `orchestrator.py` | `find_result_folder()` | ✅ Done | Now takes the pipeline's own timestamped `name` (from the NOTIFY payload) rather than reconstructing {exp_id}_{run_id}_*; globs `{name}*` under results_dir. Raises on 0 or >1 matches (session 14, ADR-022) |
+| `orchestrator.py` | `verify_run()` | ✅ Done | Full flow: gate → compare → persist → report. Now takes `experiment_names: dict` (experiment_id → pipeline name), collected live from notifications, to pass through to find_result_folder |
+| `manifest_watcher.py` | `watch_manifests_dir()` | ✅ Done | New (session 14). Watches manifests_dir for new context_manifest_*.json files, observer-first pattern (same as ADR-019's watcher.py); registers each manifest's experiments as "expected" the moment it appears — see ADR-022 |
 | `watcher.py` | `ReportDataDeletionHandler` | ✅ Done | watchdog event handler; bridges OS thread to asyncio via run_coroutine_threadsafe; fired guard prevents double-trigger |
 | `watcher.py` | `wait_for_e_drive_deletion()` | ✅ Done | Starts observer first, then pre-checks — closes race window; timeout from config; uses get_running_loop(); observer.join() via asyncio.to_thread |
 | `watcher.py` | `watch_and_confirm()` | ✅ Done | Dispatches to on_confirmed / on_timeout callbacks |
@@ -87,7 +87,7 @@ Current phase: MVP feature complete — hardening comparator + shaping gold stan
 | `init()` | ✅ Done | |
 | `register()` | ✅ Done | |
 | `run()` | ✅ Done | |
-| `run_service()` | ✅ Done | Async loop — spawns watch_and_confirm task per experiment; verify_run fires via asyncio.to_thread when confirmed_ready ⊇ expected; on_timeout() cleans up run state |
+| `run_service()` | ✅ Done | Async loop — now runs watch_manifests_dir() concurrently alongside the Postgres listener (ADR-022). Builds expected_experiment_to_run {experiment_id: run_id} from registered manifests; handle_notification() is a plain dict lookup, no parsing. Spawns watch_and_confirm task per experiment; verify_run fires via asyncio.to_thread when confirmed_ready ⊇ expected; on_timeout() / on_confirmed() both archive the manifest to processed/ or timed_out/ and clean up run state. Known gap: an unhandled exception inside a run's flow can still crash the whole service (session 14) — see open design questions |
 
 ---
 
@@ -119,13 +119,16 @@ Current phase: MVP feature complete — hardening comparator + shaping gold stan
 | Image paths for all 5 experiments — pending image transfer to regression machine | 🔲 Unresolved |
 | Primary metric column name per experiment type — hardcoded as UM-01_CountsPer50ul for MVP | ✅ Resolved |
 | RnDdata CSV uses long/melted format — needs pivot preprocessing. Not needed for MVP. | 🔲 Future |
-| Pipeline DB schema — reports_table_changes NOTIFY channel confirmed. ExperimentId carries full {exp_id}_{run_id}_{timestamp} string | ✅ Resolved |
+| Pipeline DB schema — reports_table_changes NOTIFY channel confirmed. **Correction (session 14):** ExperimentId is a bare experiment_id, NOT {exp_id}_{run_id}_{timestamp} as originally documented — that assumption was never true in either Imaging or Reanalysis mode and caused a full run to silently fail verification. See ADR-022. | ✅ Resolved (corrected) |
 | Workbook generator — automates workbook stamping with run_id. Out of scope for MVP, done manually. | 🔲 Future |
 | manifest gold_standard_checksum field is redundant — gate reads checksum from DB. Removed from manifest-schema.md and from the run_20260924_001 manifest (session 12); gold_standard_ref removed alongside it, same reasoning. | ✅ Resolved |
 | PRIMARY_METRIC constant in registrar.py — removed (session 7) | ✅ Resolved |
 | Results folder — currently manually maintained with CSVs dropped in directly. Future implementation requires password-protected unzip step before CSVs are accessible. | 🔲 Future |
 | count_tolerance strategy only supports percent deviation — a standalone absolute-difference mode is needed for near-zero-count comparisons (e.g. linkage combos). Near-term gap, not yet implemented. | 🔲 Unresolved |
 | Comparator scope extension (sample vs aggregate strategies, for linkage hybrid tolerance / dynamic range trend / grouped-sample comparisons) — shaped in ADR-021. Deferred until after data team philosophy discussion. | 🔲 Future |
+| Graceful crash isolation — an unhandled exception inside a single run's verification flow (or the notification/manifest handlers) currently propagates up and can take down the whole service, not just that run. Needs try/except boundaries around each notification handler and each _watch_experiment task. Observed session 14. | 🔲 Unresolved |
+| Test harness (`Countable.PCR`) never archives a processed manifest — `LoadManifests()` globs and reprocesses every context_manifest_*.json in the folder on every invocation, indefinitely. Separate from the verification-service-side archiving added in ADR-022; needs a harness-side fix (e.g. move to a processed/ subfolder, or accept a single `--manifest` path from the entry point). Found session 14, not yet fixed. | 🔲 Future |
+| Entry point / self-hosted GitHub Actions runner design — stamping a manifest with per-run metadata (build id, run id, timestamp) and triggering the harness. Discussion paused to prioritize the listener bug fix; to be sketched next. | 🔲 Future |
 
 ---
 
@@ -133,8 +136,8 @@ Current phase: MVP feature complete — hardening comparator + shaping gold stan
 
 - **Listener changed from polling to PostgreSQL NOTIFY/LISTEN** (ADR-012 supersedes ADR-004)
 - **Mock listener added for dev** — controlled by `listener.use_mock` config flag (ADR-013)
-- **Experiment folder naming** — `{exp_id}_{run_id}_{timestamp}`, test harness does rename at runtime (ADR-014)
-- **run_id is a coordination mechanism only** — base `exp_id` remains the stable longitudinal key in verification DB
+- ~~**Experiment folder naming** — `{exp_id}_{run_id}_{timestamp}`, test harness does rename at runtime (ADR-014)~~ — **superseded (ADR-022, session 14):** the harness never actually performs this stamping in either run mode; the naming convention and its parsing are removed
+- **Explicit manifest hand-off replaces run_id stamping** — the service watches manifests_dir directly and registers expected experiments the moment a manifest appears, rather than inferring run_id from a pipeline-supplied string (ADR-022)
 - **E: drive deletion watch as pipeline completion signal** — NOTIFY fires before F: copy is complete; watching E: for folder deletion is the safe trigger (ADR-019)
 
 ---
@@ -173,6 +176,17 @@ Current phase: MVP feature complete — hardening comparator + shaping gold stan
 ---
 
 ## Notes
+
+Silent listener bug, run-correlation redesign, result file naming (session 14):
+- Diagnosed a full weekend Reanalysis-mode run (3 experiments, real pipeline writes and `Reports` trigger all confirmed healthy) that produced zero verification output with no error anywhere. Root cause: `parse_experiment_notification()` (ADR-014) expected `experimentId` to be `{exp_id}_run_{date}_{seq}_...`; the real pipeline sends a bare experiment_id in every case. The regex never matched, returned None, and `handle_notification()` silently returned — no log, no error. Confirmed by manually firing realistic `pg_notify()` payloads against the running service and watching it react to garbage (loud JSON error) vs. a real-shaped payload (total silence).
+- Investigated the harness (`Countable.PCR`) directly: neither `AcquisitionWorkflow.ExperimentName` nor `ReanalysisWorkflow.ExperimentName` ever stamps run_id into the name — both derive it unmodified from the workbook's own `RunInfo.ExperimentId`. The run_id-stamping behavior ADR-014 documented was never implemented in either run mode; `Report.cs`'s own doc comment confirms `ExperimentId` is "assigned by IAP," an external system this codebase doesn't control.
+- Also found: `TestRunner.LoadManifests()` globs and reprocesses every `context_manifest_*.json` in the folder on every invocation — nothing ever archives one. Not yet fixed on the harness side; tracked as an open design question.
+- Redesigned run correlation around an explicit hand-off (ADR-022, supersedes ADR-014): new `src/orchestrator/manifest_watcher.py` watches manifests_dir (same observer-first pattern as ADR-019) and registers every experiment a manifest declares as "expected" the instant the file appears, building `expected_experiment_to_run: {experiment_id: run_id}`. `handle_notification()` is now a plain dict lookup; a miss prints a visible warning instead of returning silently. `parse_experiment_notification()` and its regex are deleted from `listener.py`.
+- Manifests are now archived: moved to `manifests_dir/processed/` on successful verification or `manifests_dir/timed_out/` if the E: drive watch times out, via a new `_archive()` helper in `run_service()`.
+- Second bug found immediately after, on the same replayed weekend run: `find_result_folder()` reconstructed `{exp_id}_{run_id}_*` to locate the result folder, but the pipeline actually names result folders after its own timestamped `name` (e.g. `JS221N_serial_titration_PSF_260925_1416`), which has no relationship to the verification service's run_id. Fixed by capturing the `name` field from each live notification (`experiment_names: {run_id: {experiment_id: name}}` in `run_service()`) and passing it through `verify_run()` into `find_result_folder(name, config)`.
+- Third issue, specific to `MP47b_Adverum_02` (the linkage experiment): its result folder contains a differently-named output CSV (`*CountableLinkageSummary_beta.csv`) than the previously-hardcoded `*CountableDataSummary.csv`. Added an optional `result_file_suffix` field to the manifest schema (documented in manifest-schema.md) — `find_result_folder`'s caller now globs on `experiment.get("result_file_suffix", "CountableDataSummary.csv")`. Set on `MP47b_Adverum_02` in `context_manifest_run_20260924_001.json`.
+- An unhandled exception during this session's live debugging crashed the running service outright — graceful per-run error isolation (catching inside each notification/task handler rather than letting it propagate to the event loop) is a known gap, tracked above as an open design question, not fixed this session.
+- The stuck weekend manifest (`run_20260924_001`) was recovered in place: restarting the service after these fixes re-registers it via `manifest_watcher.py`'s startup catch-up scan, and replaying the three experiments' real NOTIFY payloads (from their actual `Reports` rows) lets the run complete without re-running the harness.
 
 Hybrid tolerance strategy + ADR-021 (session 12):
 - Added src/comparator/strategies/hybrid_tolerance.py: run_hybrid_tolerance()/compare_sample_hybrid() — same sample-scope shape as count_tolerance, but expected_value < count_threshold uses absolute tolerance instead of percent (percent deviation is meaningless near zero, e.g. low-count linkage combos)
