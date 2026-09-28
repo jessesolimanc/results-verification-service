@@ -1,0 +1,118 @@
+name: Trigger Regression Run
+
+# ADR-023: manual entry point for the regression testing system.
+#
+# This workflow does NOT build or install anything. The expected sequence
+# (still manual outside this workflow) is: build the pipeline, install it
+# on the regression machine, THEN dispatch this workflow to kick off a
+# run against whatever is now installed. See ADR-023 for why installation
+# stays manual for now.
+#
+# Fire-and-forget by design: this job waits for the test harness process
+# to exit, but does NOT wait for the verification service to pick up and
+# verify the resulting run — that happens asynchronously, on its own
+# schedule, watched separately. Check the service's own logs/DB for the
+# verdict.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pipeline_build:
+        description: >-
+          Build identifier of the pipeline/IAP build currently installed
+          on the regression machine (e.g. "3.0.0.2977"). Recorded on the
+          manifest as-is — this workflow does not verify it against what's
+          actually installed, so double check before dispatching.
+        required: true
+        type: string
+      scenario:
+        description: "Scenario name recorded on the manifest."
+        required: false
+        type: string
+        default: "new_build_regression_baseline"
+      run_type:
+        description: "Run mode passed to the test harness."
+        required: false
+        type: choice
+        options:
+          - Reanalysis
+          - Imaging
+        default: Reanalysis
+
+# The self-hosted runner is one physical regression machine — only one
+# run can meaningfully happen on it at a time anyway, but make that
+# explicit rather than relying on there only ever being one runner online.
+concurrency:
+  group: pcr-regression-trigger
+  cancel-in-progress: false
+
+jobs:
+  trigger:
+    runs-on: [self-hosted, pcr-regression]
+
+    steps:
+      - name: Checkout results-verification-service
+        uses: actions/checkout@v6
+        with:
+          # This workspace persists on the regression machine between runs
+          # (it is not a fresh VM per job like a GitHub-hosted runner). The
+          # default `clean: true` runs `git clean -ffdx`, which deletes
+          # *ignored* files too — that would wipe config/local_config.yaml
+          # (this machine's real paths/credentials) and .venv on every
+          # single dispatch. Keep clean off; this repo has no build
+          # artifacts in its own tree that would need clearing anyway.
+          clean: false
+
+      - name: Ensure Python virtual environment
+        shell: pwsh
+        run: |
+          if (-not (Test-Path ".venv\Scripts\python.exe")) {
+            python -m venv .venv
+          }
+          & ".venv\Scripts\python.exe" -m pip install --quiet -r requirements.txt
+
+      - name: Stamp a new run manifest
+        id: stamp
+        shell: pwsh
+        run: |
+          & ".venv\Scripts\python.exe" entry_point\stamp_manifest_for_run.py `
+            --pipeline-build "${{ inputs.pipeline_build }}" `
+            --scenario "${{ inputs.scenario }}" `
+            --run-type "${{ inputs.run_type }}"
+
+      - name: Run the test harness
+        shell: pwsh
+        # COUNTABLE_PCR_REGRESSION_TEST_MANIFEST_PATH must be the manifests
+        # *folder* (Countable.Pcr.TestHarness/Program.cs globs it), i.e.
+        # the same value as this repo's config.paths.manifests_dir on this
+        # machine. Set both repo variables once in
+        # Settings -> Secrets and variables -> Actions -> Variables.
+        #
+        # A 3-hour cap guards against Program.cs's `catch { ... Console.Read(); }`
+        # on a fatal, unhandled exception — that blocks forever waiting for
+        # console input that will never come on a runner. This does not fix
+        # that (out of scope here — see STATUS.md open design questions,
+        # harness changes are being deferred), it just keeps one bad run
+        # from occupying the runner indefinitely.
+        timeout-minutes: 180
+        env:
+          COUNTABLE_PCR_REGRESSION_TEST_MANIFEST_PATH: ${{ vars.PCR_MANIFESTS_DIR }}
+        run: |
+          & "${{ vars.PCR_TEST_HARNESS_EXE_PATH }}"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Test harness exited with code $LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
+
+      - name: Summary
+        if: always()
+        shell: pwsh
+        run: |
+          "### Regression run triggered" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "- **run_id:** ${{ steps.stamp.outputs.run_id }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "- **manifest:** ``${{ steps.stamp.outputs.manifest_path }}``" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "- **pipeline_build:** ${{ inputs.pipeline_build }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "- **scenario:** ${{ inputs.scenario }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "- **run_type:** ${{ inputs.run_type }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "The harness process has exited. Verification happens asynchronously — check the verification service for the actual result." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append

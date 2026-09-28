@@ -3,7 +3,7 @@
 Quick reference for current implementation state. Update this file at the end of every development session.
 
 Last updated: 2026-09-28 (session 14)
-Current phase: Phase 3 hardening — first live end-to-end Reanalysis run against the real harness, run-correlation redesign (ADR-022) and PR review hardening
+Current phase: Phase 3 hardening (complete) moving into entry-point automation — GitHub Actions trigger added (ADR-023)
 
 ---
 
@@ -89,6 +89,15 @@ Current phase: Phase 3 hardening — first live end-to-end Reanalysis run agains
 | `run()` | ✅ Done | |
 | `run_service()` | ✅ Done | Async loop — runs watch_manifests_dir() concurrently alongside the Postgres listener (ADR-022), now gated on a `manifest_watcher_ready` event so the listener can't start consuming before the initial manifest catch-up scan completes (session 14, PR review). Builds expected_experiment_to_run {experiment_id: run_id} from registered manifests, rejecting (not overwriting) a manifest that collides with an already-pending run; handle_new_manifest() retries its JSON read with backoff to tolerate partial writes. handle_notification() is a plain dict lookup, no parsing. Spawns watch_and_confirm task per experiment; verify_run fires via asyncio.to_thread when confirmed_ready ⊇ expected, now wrapped in try/except — on failure the manifest is archived to a new failed/ subfolder and run state is freed instead of crashing the service. processed_dir/timed_out_dir/failed_dir all created with parents=True |
 
+### `entry_point/` (new, session 14)
+| File | Function | Status | Notes |
+|---|---|---|---|
+| `manifest_template.json` | — | ✅ Done | Committed stable `build_verdict_policy` + `experiments` (all 3 registered experiments) — the parts of a manifest that don't change run to run. Editing this file is how an experiment gets added/changed/removed (ADR-023) |
+| `stamp_manifest_for_run.py` | `load_config()` | ✅ Done | Standalone copy of `src.main.load_config()` — deliberately not imported, to avoid pulling in asyncpg/watchdog just to read a path |
+| `stamp_manifest_for_run.py` | `next_run_id()` | ✅ Done | Scans manifests_dir + processed/timed_out/failed for today's highest sequence number; tested against collisions and cross-folder scanning |
+| `stamp_manifest_for_run.py` | `main()` | ✅ Done | CLI: `--pipeline-build` (required), `--scenario`, `--run-type`. Refuses to stamp while an unarchived manifest exists at manifests_dir's top level (tested). Writes `GITHUB_OUTPUT` (run_id, manifest_path) when running under Actions |
+| `.github/workflows/trigger_regression_run.yml` | — | ✅ Done | `workflow_dispatch` on `[self-hosted, pcr-regression]`. Stamps a manifest, then runs the already-installed test harness exe with a 3hr timeout cap (guards the harness's own `Console.Read()`-on-fatal-exception hang, not fixed here). Fire-and-forget — does not wait for verification. **Not yet exercised for real: no self-hosted runner is registered on the regression machine yet, and `PCR_MANIFESTS_DIR`/`PCR_TEST_HARNESS_EXE_PATH` repo variables are not yet set.** |
+
 ---
 
 ## Schema status
@@ -128,7 +137,9 @@ Current phase: Phase 3 hardening — first live end-to-end Reanalysis run agains
 | Comparator scope extension (sample vs aggregate strategies, for linkage hybrid tolerance / dynamic range trend / grouped-sample comparisons) — shaped in ADR-021. Deferred until after data team philosophy discussion. | 🔲 Future |
 | Graceful crash isolation — an unhandled exception inside a single run's verification flow (or the notification/manifest handlers) currently propagates up and can take down the whole service, not just that run. Needs try/except boundaries around each notification handler and each _watch_experiment task. Observed session 14. **Fixed (session 14, PR review):** `on_confirmed()` now wraps `verify_run()` in try/except, archiving to a new `manifests_dir/failed/` on exception and freeing run state. Notification/manifest handlers themselves still have no equivalent boundary — a malformed payload or manifest could still raise uncaught; narrower in practice since both are guarded by their own try/except-like validation already, but worth a follow-up pass. | ✅ Resolved (partially — see note) |
 | Test harness (`Countable.PCR`) never archives a processed manifest — `LoadManifests()` globs and reprocesses every context_manifest_*.json in the folder on every invocation, indefinitely. Separate from the verification-service-side archiving added in ADR-022; needs a harness-side fix (e.g. move to a processed/ subfolder, or accept a single `--manifest` path from the entry point). Found session 14, not yet fixed. | 🔲 Future |
-| Entry point / self-hosted GitHub Actions runner design — stamping a manifest with per-run metadata (build id, run id, timestamp) and triggering the harness. Discussion paused to prioritize the listener bug fix; to be sketched next. | 🔲 Future |
+| Entry point / self-hosted GitHub Actions runner design — stamping a manifest with per-run metadata (build id, run id, timestamp) and triggering the harness. Designed and implemented session 14 (ADR-023). Not yet live: needs a self-hosted runner registered on the regression machine (labels `[self-hosted, pcr-regression]`) and the `PCR_MANIFESTS_DIR` / `PCR_TEST_HARNESS_EXE_PATH` repo variables set before first real dispatch. | ✅ Resolved (implemented, not yet deployed) |
+| Automating build → install (currently both manual, ahead of the new GitHub Actions trigger) — out of scope for ADR-023; touches code-signing, MSI install, and the pipeline's own service lifecycle. | 🔲 Future |
+| `pipeline_build` on the manifest is a free-text label the person dispatching the workflow types in — nothing checks it against what's actually installed on the regression machine. A wrong value silently produces a misleadingly-labeled but otherwise normal run. | 🔲 Unresolved |
 
 ---
 
@@ -140,6 +151,7 @@ Current phase: Phase 3 hardening — first live end-to-end Reanalysis run agains
 - **Explicit manifest hand-off replaces run_id stamping** — the service watches manifests_dir directly and registers expected experiments the moment a manifest appears, rather than inferring run_id from a pipeline-supplied string (ADR-022)
 - **E: drive deletion watch as pipeline completion signal** — NOTIFY fires before F: copy is complete; watching E: for folder deletion is the safe trigger (ADR-019); now matches on the pipeline's `name` field instead of the never-implemented `{exp_id}_{run_id}_*` convention (ADR-022 addendum, session 14)
 - **Per-run failures no longer crash the service** — `verify_run()` failures are caught at the `on_confirmed()` boundary and archived to `failed/`, so one bad run doesn't take down in-flight or future runs (ADR-022 addendum, session 14)
+- **GitHub Actions `workflow_dispatch` as the manual run trigger** — a self-hosted runner on the regression machine stamps a manifest from a committed template and starts the test harness; fire-and-forget, no build/install automation, no waiting on verification (ADR-023)
 
 ---
 
@@ -177,6 +189,15 @@ Current phase: Phase 3 hardening — first live end-to-end Reanalysis run agains
 ---
 
 ## Notes
+
+GitHub Actions entry point (ADR-023, session 14 continued):
+- Read the two existing Countable.PCR build workflows (Build_Official_Release.yml, Build_Unofficial_Release.yml) and Bump_Build_Number.yml for house conventions before writing the new one — both run on GitHub-hosted `windows-latest`, since building/signing needs no special hardware. The new regression trigger differs: it must run on the regression machine itself (`[self-hosted, pcr-regression]`), since only that machine has the installed pipeline and the E:/F: drives.
+- Read `Countable.Pcr.TestHarness/Program.cs` directly to confirm the actual invocation contract rather than guessing: it reads `COUNTABLE_PCR_REGRESSION_TEST_MANIFEST_PATH` (a folder, not a single file — confirms `LoadManifests()`'s whole-folder glob), restarts the `CountableAnalysisService` Windows service itself before running, and on any unhandled exception calls `Console.Read()` — which would block forever on an unattended runner. Not fixed (harness changes are out of scope this pass), but the harness step's `timeout-minutes: 180` exists specifically to bound that failure mode.
+- New `entry_point/` directory: `manifest_template.json` (committed stable `build_verdict_policy` + `experiments`, copied from the real, currently-registered 3-experiment manifest) and `stamp_manifest_for_run.py` (stamps the `run` block, computes `run_id` by scanning manifests_dir + processed/timed_out/failed for today's highest sequence number, refuses to run while an unarchived manifest already exists). Tested standalone against a scratch config before wiring into the workflow: verified the collision refusal, the sequence bump across archive folders, and `GITHUB_ACTOR`/`GITHUB_RUN_ID`/`GITHUB_OUTPUT` handling.
+- New `.github/workflows/trigger_regression_run.yml`: `workflow_dispatch` with `pipeline_build` (required text), `scenario` and `run_type` (both optional) inputs; checks out with `clean: false` (this workspace persists on the regression machine between dispatches — the default `git clean -ffdx` would delete the gitignored `config/local_config.yaml` and `.venv` every run, which would have been a nasty one to debug later); ensures a venv; runs the stamping script; runs the already-installed harness exe with the manifests folder as an env var; fire-and-forget beyond that — does not wait for or report a verification verdict.
+- Found in passing: `pyyaml` was an undeclared dependency — both `main.py` and the new stamping script import it, but it was never in `requirements.txt` (only present incidentally in the existing dev venv). Added.
+- Not yet deployed: no self-hosted runner is registered on the regression machine yet, and the workflow's two repo variables (`PCR_MANIFESTS_DIR`, `PCR_TEST_HARNESS_EXE_PATH`) haven't been set. First real dispatch is blocked on both.
+- Deliberately not addressed here, tracked as open questions above: automating build→install, and validating `pipeline_build` against what's actually installed.
 
 PR review hardening on the ADR-022 redesign (session 14 continued):
 - A GitHub Copilot review of the ADR-022 PR surfaced 8 comments; all 8 were independently verified against the actual code before fixing (two were initially unclear whether they were real issues — both confirmed real: the `watcher.py` E: drive match and the `runs.manifest_path` staleness, below).
