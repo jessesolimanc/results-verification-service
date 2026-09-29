@@ -78,9 +78,37 @@ def register(config: dict) -> None:
 
 
 def run(config: dict) -> None:
-    """Start the verification service listener loop."""
+    """
+    Start the verification service listener loop.
+
+    Catches Ctrl+C / a console-close-style interrupt so a normal shutdown
+    request prints a clean message instead of dumping a KeyboardInterrupt
+    traceback. This matters once the service runs unattended under a
+    service wrapper (ADR-024): that's how NSSM's default stop method
+    signals a running console app to shut down.
+
+    Note on what actually happens underneath: asyncio.run()'s own cleanup
+    (not this except block) is what does the real work — on interrupt it
+    cancels the still-running run_service() coroutine at whatever await
+    point it's suspended, which lets run_service()'s own
+    `finally: manifest_watch_task.cancel()` execute, which in turn lets
+    watch_manifests_dir()'s finally (observer.stop()/join()) execute. It
+    also cancels manifest_watch_task directly and, since Python 3.9,
+    calls loop.shutdown_default_executor() before returning — which waits
+    for any verify_run() currently in flight on its worker thread
+    (asyncio.to_thread) to actually finish, rather than killing it
+    mid-write. None of that is untested-in-theory: it's Python's
+    documented asyncio.run() shutdown sequence, not something this
+    project added. What this except block adds on top is purely cosmetic
+    — a clean log line instead of a traceback — since the token: Event
+    passed to listen_async() is never actually set anywhere; shutdown
+    goes through task cancellation, not the token.
+    """
     token = asyncio.Event()
-    asyncio.run(run_service(config, token))
+    try:
+        asyncio.run(run_service(config, token))
+    except KeyboardInterrupt:
+        print("Shutdown requested — verification service stopping.")
 
 
 async def run_service(config: dict, token: asyncio.Event) -> None:

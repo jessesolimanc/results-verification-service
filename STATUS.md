@@ -3,7 +3,7 @@
 Quick reference for current implementation state. Update this file at the end of every development session.
 
 Last updated: 2026-09-28 (session 14)
-Current phase: Phase 3 hardening (complete) moving into entry-point automation — GitHub Actions trigger added (ADR-023)
+Current phase: Phase 3 hardening (complete) moving into entry-point + deployment automation — GitHub Actions trigger (ADR-023, PR-reviewed) and Windows Service wrapper (ADR-024) added
 
 ---
 
@@ -86,7 +86,7 @@ Current phase: Phase 3 hardening (complete) moving into entry-point automation �
 | `load_config()` | ✅ Done | |
 | `init()` | ✅ Done | |
 | `register()` | ✅ Done | |
-| `run()` | ✅ Done | |
+| `run()` | ✅ Done | Now catches `KeyboardInterrupt` around `asyncio.run()` for a clean shutdown message — matters once running unattended under the new NSSM service wrapper, which signals stop via a Ctrl+C-style console event (ADR-024). The substantive shutdown behavior (draining an in-flight `verify_run()`, stopping the manifest watcher) was already handled by `asyncio.run()`'s own cleanup, not new code |
 | `run_service()` | ✅ Done | Async loop — runs watch_manifests_dir() concurrently alongside the Postgres listener (ADR-022), now gated on a `manifest_watcher_ready` event so the listener can't start consuming before the initial manifest catch-up scan completes (session 14, PR review). Builds expected_experiment_to_run {experiment_id: run_id} from registered manifests, rejecting (not overwriting) a manifest that collides with an already-pending run; handle_new_manifest() retries its JSON read with backoff to tolerate partial writes. handle_notification() is a plain dict lookup, no parsing. Spawns watch_and_confirm task per experiment; verify_run fires via asyncio.to_thread when confirmed_ready ⊇ expected, now wrapped in try/except — on failure the manifest is archived to a new failed/ subfolder and run state is freed instead of crashing the service. processed_dir/timed_out_dir/failed_dir all created with parents=True |
 
 ### `entry_point/` (session 14, PR-reviewed session 15)
@@ -97,6 +97,12 @@ Current phase: Phase 3 hardening (complete) moving into entry-point automation �
 | `stamp_manifest_for_run.py` | `next_run_id()` | ✅ Done | Scans manifests_dir + processed/timed_out/failed for today's highest sequence number; tested against collisions and cross-folder scanning |
 | `stamp_manifest_for_run.py` | `main()` | ✅ Done | CLI: `--pipeline-build` (required), `--scenario`, `--run-type`. Refuses to stamp while an unarchived manifest exists at manifests_dir's top level — glob fixed session 15 (PR review) to match `manifest_watcher.py`'s `context_manifest_*.json` exactly, not just `*run_*` names, closing a gap where a stale non-run-prefixed file could slip past the check. Writes `GITHUB_OUTPUT` (run_id, manifest_path) when running under Actions |
 | `.github/workflows/trigger_regression_run.yml` | — | ✅ Done | `workflow_dispatch` on `[self-hosted, pcr-regression]`. Stamps a manifest, then runs the already-installed test harness exe with a 3hr timeout cap (guards the harness's own `Console.Read()`-on-fatal-exception hang, not fixed here). Fire-and-forget — does not wait for verification. Session 15 (PR review): dispatch inputs now passed through job-level `env:` and read via `$env:...` instead of being interpolated as `${{ inputs.* }}` text directly into PowerShell — the latter was a real command-injection path on the self-hosted runner. Summary step now branches on the stamp/harness steps' actual outcomes instead of always printing success text. **Not yet exercised for real: no self-hosted runner is registered on the regression machine yet, and `PCR_MANIFESTS_DIR`/`PCR_TEST_HARNESS_EXE_PATH` repo variables are not yet set.** |
+
+### `scripts/` (new, session 15)
+| File | Function | Status | Notes |
+|---|---|---|---|
+| `install_verification_service.ps1` | — | ✅ Written, not yet run | Registers `python -m src.main --run` as a Windows Service via NSSM (ADR-024). Idempotent (safe to re-run to reconfigure). Sets logging with rotation, a 60s graceful-stop timeout, and crash-restart-with-delay. **Cannot be executed or verified from this session — no way to run PowerShell/service commands on the real Windows regression machine from here. Needs to be run (as Administrator) and verified on that machine.** |
+| `uninstall_verification_service.ps1` | — | ✅ Written, not yet run | Stops and removes the service; leaves the repo, venv, DB, and logs untouched. Same caveat as above. |
 
 ---
 
@@ -139,6 +145,9 @@ Current phase: Phase 3 hardening (complete) moving into entry-point automation �
 | Test harness (`Countable.PCR`) never archives a processed manifest — `LoadManifests()` globs and reprocesses every context_manifest_*.json in the folder on every invocation, indefinitely. Separate from the verification-service-side archiving added in ADR-022; needs a harness-side fix (e.g. move to a processed/ subfolder, or accept a single `--manifest` path from the entry point). Found session 14, not yet fixed. | 🔲 Future |
 | Entry point / self-hosted GitHub Actions runner design — stamping a manifest with per-run metadata (build id, run id, timestamp) and triggering the harness. Designed and implemented session 14 (ADR-023). Not yet live: needs a self-hosted runner registered on the regression machine (labels `[self-hosted, pcr-regression]`) and the `PCR_MANIFESTS_DIR` / `PCR_TEST_HARNESS_EXE_PATH` repo variables set before first real dispatch. | ✅ Resolved (implemented, not yet deployed) |
 | Automating build → install (currently both manual, ahead of the new GitHub Actions trigger) — out of scope for ADR-023; touches code-signing, MSI install, and the pipeline's own service lifecycle. | 🔲 Future |
+| Windows Service wrapper for the verification service (Phase 4 checklist item) — implemented via NSSM (ADR-024), scripts written and reasoned through but not yet run or verified against the real regression machine; NSSM itself is a new manual tooling prerequisite that doesn't exist on that machine yet. | ✅ Resolved (implemented, not yet deployed) |
+| Packaging the regression machine's whole setup (Python/venv, NSSM, this service registration, the self-hosted GitHub Actions runner) into a proper installer, rather than a sequence of manual steps + scripts — raised as a future direction (ADR-024). Speculative without a second machine to validate portability against. | 🔲 Future |
+| `main.py`'s logging is entirely `print()` calls to stdout/stderr — fine in an interactive terminal, but the only visibility into the service once it's running under NSSM is two redirected log files with no structure (no levels, no timestamps beyond what's already inline in some messages). Worth structured logging at some point. | 🔲 Future |
 | `pipeline_build` on the manifest is a free-text label the person dispatching the workflow types in — nothing checks it against what's actually installed on the regression machine. A wrong value silently produces a misleadingly-labeled but otherwise normal run. | 🔲 Unresolved |
 
 ---
@@ -152,6 +161,7 @@ Current phase: Phase 3 hardening (complete) moving into entry-point automation �
 - **E: drive deletion watch as pipeline completion signal** — NOTIFY fires before F: copy is complete; watching E: for folder deletion is the safe trigger (ADR-019); now matches on the pipeline's `name` field instead of the never-implemented `{exp_id}_{run_id}_*` convention (ADR-022 addendum, session 14)
 - **Per-run failures no longer crash the service** — `verify_run()` failures are caught at the `on_confirmed()` boundary and archived to `failed/`, so one bad run doesn't take down in-flight or future runs (ADR-022 addendum, session 14)
 - **GitHub Actions `workflow_dispatch` as the manual run trigger** — a self-hosted runner on the regression machine stamps a manifest from a committed template and starts the test harness; fire-and-forget, no build/install automation, no waiting on verification (ADR-023)
+- **NSSM as the Windows Service wrapper** — not a native pywin32 service: NSSM registers itself with the SCM and supervises `python -m src.main --run` as a plain child process, translating start/stop into a Ctrl+C-style signal `main.py` now handles cleanly. Chosen because every other service on this machine is a proper .NET service (no existing non-.NET wrapper convention to match), and because it requires no changes to `main.py`'s actual shutdown model (ADR-024)
 
 ---
 
@@ -189,6 +199,15 @@ Current phase: Phase 3 hardening (complete) moving into entry-point automation �
 ---
 
 ## Notes
+
+Windows Service wrapper for the verification service (ADR-024, session 15):
+- Motivation: the GitHub Actions trigger (ADR-023) is only useful if something is actually listening when it stamps a manifest and starts the harness — up to now the service has only ever run because someone had a terminal open, which is the exact gap that caused session 14's original weekend-run incident.
+- Checked first whether an existing non-.NET service-wrapper convention already exists on this machine, since every other service there (e.g. CountableAnalysisService) is a proper .NET service and that tells us nothing about how to run a Python process as one. Confirmed none does — NSSM needs to be installed as new, additional tooling on the regression machine, which is now documented as a manual prerequisite (README, ADR-024) rather than assumed.
+- New `scripts/install_verification_service.ps1` (idempotent — reconfigures in place if the service already exists) and `scripts/uninstall_verification_service.ps1`. Neither could be executed or verified from this session — there's no way to run PowerShell or query Windows services on the real regression machine from here, unlike the entry-point stamping script, which could be exercised against a scratch directory. Caught and fixed one real bug in review before finalizing: an invalid PowerShell string-concatenation pattern (`Write-Error "a" +` / `"b"` as bare command arguments, rather than building the string first) that would not have parsed correctly.
+- `main.py`'s `run()` now catches `KeyboardInterrupt` for a clean shutdown message — NSSM's default stop method sends a Ctrl+C-style console signal. The actual shutdown mechanics underneath (draining an in-flight `verify_run()` via `asyncio.run()`'s `shutdown_default_executor()`, stopping the manifest watcher's observer thread) were already handled by asyncio's own documented cleanup sequence, not new code — this change is purely a cosmetic improvement over the raw traceback that would otherwise print. Not verified against a live stop on the real service; this is reasoning from Python's documented behavior, flagged as such in the ADR.
+- Install script configuration choices: 60s timeout on the Ctrl+C-style stop method (to give an in-flight verification time to finish rather than being killed mid-write); crash-restart with a 15s delay (applies only when the process exits unexpectedly, not on a deliberate stop); stdout/stderr redirected to `logs/service_stdout.log`/`service_stderr.log` with basic size-based rotation, since `main.py` has no structured logging today — only `print()` calls, tracked as a future improvement.
+- User raised packaging the whole regression-machine setup (Python/venv, NSSM, this service, the self-hosted runner) into a proper installer eventually — noted as a tracked future direction, not attempted now (no second machine to validate portability against).
+- Not yet deployed, same as ADR-023: nothing here has run on the real machine yet.
 
 PR review hardening on the ADR-023 GitHub Actions trigger (session 15):
 - 3 Copilot review comments on the trigger_regression_run.yml PR, all confirmed accurate by direct inspection before fixing:

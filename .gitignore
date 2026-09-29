@@ -31,3 +31,4 @@ config/local_config.yaml
 .idea/
 .DS_Store
 Thumbs.db
+logs/
