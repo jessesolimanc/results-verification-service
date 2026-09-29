@@ -89,14 +89,14 @@ Current phase: Phase 3 hardening (complete) moving into entry-point automation �
 | `run()` | ✅ Done | |
 | `run_service()` | ✅ Done | Async loop — runs watch_manifests_dir() concurrently alongside the Postgres listener (ADR-022), now gated on a `manifest_watcher_ready` event so the listener can't start consuming before the initial manifest catch-up scan completes (session 14, PR review). Builds expected_experiment_to_run {experiment_id: run_id} from registered manifests, rejecting (not overwriting) a manifest that collides with an already-pending run; handle_new_manifest() retries its JSON read with backoff to tolerate partial writes. handle_notification() is a plain dict lookup, no parsing. Spawns watch_and_confirm task per experiment; verify_run fires via asyncio.to_thread when confirmed_ready ⊇ expected, now wrapped in try/except — on failure the manifest is archived to a new failed/ subfolder and run state is freed instead of crashing the service. processed_dir/timed_out_dir/failed_dir all created with parents=True |
 
-### `entry_point/` (new, session 14)
+### `entry_point/` (session 14, PR-reviewed session 15)
 | File | Function | Status | Notes |
 |---|---|---|---|
 | `manifest_template.json` | — | ✅ Done | Committed stable `build_verdict_policy` + `experiments` (all 3 registered experiments) — the parts of a manifest that don't change run to run. Editing this file is how an experiment gets added/changed/removed (ADR-023) |
 | `stamp_manifest_for_run.py` | `load_config()` | ✅ Done | Standalone copy of `src.main.load_config()` — deliberately not imported, to avoid pulling in asyncpg/watchdog just to read a path |
 | `stamp_manifest_for_run.py` | `next_run_id()` | ✅ Done | Scans manifests_dir + processed/timed_out/failed for today's highest sequence number; tested against collisions and cross-folder scanning |
-| `stamp_manifest_for_run.py` | `main()` | ✅ Done | CLI: `--pipeline-build` (required), `--scenario`, `--run-type`. Refuses to stamp while an unarchived manifest exists at manifests_dir's top level (tested). Writes `GITHUB_OUTPUT` (run_id, manifest_path) when running under Actions |
-| `.github/workflows/trigger_regression_run.yml` | — | ✅ Done | `workflow_dispatch` on `[self-hosted, pcr-regression]`. Stamps a manifest, then runs the already-installed test harness exe with a 3hr timeout cap (guards the harness's own `Console.Read()`-on-fatal-exception hang, not fixed here). Fire-and-forget — does not wait for verification. **Not yet exercised for real: no self-hosted runner is registered on the regression machine yet, and `PCR_MANIFESTS_DIR`/`PCR_TEST_HARNESS_EXE_PATH` repo variables are not yet set.** |
+| `stamp_manifest_for_run.py` | `main()` | ✅ Done | CLI: `--pipeline-build` (required), `--scenario`, `--run-type`. Refuses to stamp while an unarchived manifest exists at manifests_dir's top level — glob fixed session 15 (PR review) to match `manifest_watcher.py`'s `context_manifest_*.json` exactly, not just `*run_*` names, closing a gap where a stale non-run-prefixed file could slip past the check. Writes `GITHUB_OUTPUT` (run_id, manifest_path) when running under Actions |
+| `.github/workflows/trigger_regression_run.yml` | — | ✅ Done | `workflow_dispatch` on `[self-hosted, pcr-regression]`. Stamps a manifest, then runs the already-installed test harness exe with a 3hr timeout cap (guards the harness's own `Console.Read()`-on-fatal-exception hang, not fixed here). Fire-and-forget — does not wait for verification. Session 15 (PR review): dispatch inputs now passed through job-level `env:` and read via `$env:...` instead of being interpolated as `${{ inputs.* }}` text directly into PowerShell — the latter was a real command-injection path on the self-hosted runner. Summary step now branches on the stamp/harness steps' actual outcomes instead of always printing success text. **Not yet exercised for real: no self-hosted runner is registered on the regression machine yet, and `PCR_MANIFESTS_DIR`/`PCR_TEST_HARNESS_EXE_PATH` repo variables are not yet set.** |
 
 ---
 
@@ -189,6 +189,13 @@ Current phase: Phase 3 hardening (complete) moving into entry-point automation �
 ---
 
 ## Notes
+
+PR review hardening on the ADR-023 GitHub Actions trigger (session 15):
+- 3 Copilot review comments on the trigger_regression_run.yml PR, all confirmed accurate by direct inspection before fixing:
+  1. Command injection: dispatch inputs (`pipeline_build`, `scenario`, `run_type`) were interpolated as `${{ inputs.* }}` directly into two PowerShell `run:` blocks (the stamp step and the summary step) — GitHub substitutes `${{ }}` expressions into the script's text before PowerShell parses it, so a crafted input value could break out of its quoted argument and execute arbitrary commands on the self-hosted runner. Fixed with a job-level `env:` block (`PIPELINE_BUILD`/`SCENARIO`/`RUN_TYPE`) and `$env:...` reads instead — a real env var read at runtime, not a script-text splice.
+  2. `stamp_manifest_for_run.py`'s collision safety check globbed `context_manifest_run_*.json`, narrower than `manifest_watcher.py`'s actual `context_manifest_*.json` match — a stale file like `context_manifest_old.json` would defeat the safety check while still being exactly what it's meant to catch. Fixed to use the identical glob; re-verified against a scratch manifests_dir with that exact filename.
+  3. The job Summary step runs `if: always()` but was unconditionally printing success text ("Regression run triggered", "harness process has exited") even when stamping failed or the harness step failed/timed out — the opposite of useful during the failure modes a job summary exists for. Fixed by giving the harness step an `id` and branching the summary text on `steps.stamp.outcome`/`steps.harness.outcome`.
+- Full detail in ADR-023's new Addendum section.
 
 GitHub Actions entry point (ADR-023, session 14 continued):
 - Read the two existing Countable.PCR build workflows (Build_Official_Release.yml, Build_Unofficial_Release.yml) and Bump_Build_Number.yml for house conventions before writing the new one — both run on GitHub-hosted `windows-latest`, since building/signing needs no special hardware. The new regression trigger differs: it must run on the regression machine itself (`[self-hosted, pcr-regression]`), since only that machine has the installed pipeline and the E:/F: drives.

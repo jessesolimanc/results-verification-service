@@ -50,6 +50,22 @@ jobs:
   trigger:
     runs-on: [self-hosted, pcr-regression]
 
+    # Dispatch inputs are exposed as real environment variables here rather
+    # than being interpolated as `${{ inputs.* }}` text directly into any
+    # `run:` script below (PR review, session 15): a `${{ }}` expression is
+    # substituted into the step's script *before* PowerShell ever parses
+    # it, so a value like `foo"; Remove-Item -Recurse C:\; #` would close
+    # the quoted argument and execute arbitrary commands on this runner.
+    # `env:` assignment doesn't have that problem — the runner sets an
+    # actual process environment variable, and `$env:NAME` expansion inside
+    # the script is a normal runtime string read, not a script-text splice.
+    # Every step below that needs an input value reads it via $env:, never
+    # via ${{ inputs.* }} in a run: block.
+    env:
+      PIPELINE_BUILD: ${{ inputs.pipeline_build }}
+      SCENARIO: ${{ inputs.scenario }}
+      RUN_TYPE: ${{ inputs.run_type }}
+
     steps:
       - name: Checkout results-verification-service
         uses: actions/checkout@v6
@@ -76,11 +92,12 @@ jobs:
         shell: pwsh
         run: |
           & ".venv\Scripts\python.exe" entry_point\stamp_manifest_for_run.py `
-            --pipeline-build "${{ inputs.pipeline_build }}" `
-            --scenario "${{ inputs.scenario }}" `
-            --run-type "${{ inputs.run_type }}"
+            --pipeline-build "$env:PIPELINE_BUILD" `
+            --scenario "$env:SCENARIO" `
+            --run-type "$env:RUN_TYPE"
 
       - name: Run the test harness
+        id: harness
         shell: pwsh
         # COUNTABLE_PCR_REGRESSION_TEST_MANIFEST_PATH must be the manifests
         # *folder* (Countable.Pcr.TestHarness/Program.cs globs it), i.e.
@@ -107,12 +124,41 @@ jobs:
       - name: Summary
         if: always()
         shell: pwsh
+        # Report what actually happened rather than assuming success:
+        # `if: always()` means this step still runs after the stamp or
+        # harness step fails, so it must check their outcomes rather than
+        # unconditionally printing success text (PR review, session 15) —
+        # otherwise a failed stamp (no manifest, no harness ever started)
+        # or a timed-out/nonzero-exit harness would both read as a normal
+        # "run triggered" in the job summary, which is exactly the
+        # information an operator needs to get right during a failure.
         run: |
-          "### Regression run triggered" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          "- **run_id:** ${{ steps.stamp.outputs.run_id }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          "- **manifest:** ``${{ steps.stamp.outputs.manifest_path }}``" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          "- **pipeline_build:** ${{ inputs.pipeline_build }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          "- **scenario:** ${{ inputs.scenario }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          "- **run_type:** ${{ inputs.run_type }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          "The harness process has exited. Verification happens asynchronously — check the verification service for the actual result." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          $stampOutcome = "${{ steps.stamp.outcome }}"
+          $harnessOutcome = "${{ steps.harness.outcome }}"
+
+          function Write-Summary($line) {
+            $line | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          }
+
+          if ($stampOutcome -ne "success") {
+            Write-Summary "### Regression run FAILED — manifest stamping failed"
+            Write-Summary ""
+            Write-Summary "The harness was never started. See the 'Stamp a new run manifest' step log above for why (a common cause: an unarchived manifest already sitting in manifests_dir — see ADR-023's safety check)."
+          } elseif ($harnessOutcome -ne "success") {
+            Write-Summary "### Regression run PARTIALLY FAILED — harness did not complete successfully"
+            Write-Summary ""
+            Write-Summary "- **run_id:** ${{ steps.stamp.outputs.run_id }}"
+            Write-Summary "- **manifest:** ``${{ steps.stamp.outputs.manifest_path }}``"
+            Write-Summary ""
+            Write-Summary "A manifest was stamped, but the test harness step did not exit successfully — either it returned a nonzero exit code, or it hit the 180-minute timeout (a likely sign of Program.cs's known Console.Read() hang on an unhandled exception; see STATUS.md). Check the 'Run the test harness' step log. The stamped manifest is still sitting in manifests_dir unarchived — the running verification service will eventually move it to timed_out/ once its own E: drive watch times out, but it will not be verified."
+          } else {
+            Write-Summary "### Regression run triggered"
+            Write-Summary ""
+            Write-Summary "- **run_id:** ${{ steps.stamp.outputs.run_id }}"
+            Write-Summary "- **manifest:** ``${{ steps.stamp.outputs.manifest_path }}``"
+            Write-Summary "- **pipeline_build:** $env:PIPELINE_BUILD"
+            Write-Summary "- **scenario:** $env:SCENARIO"
+            Write-Summary "- **run_type:** $env:RUN_TYPE"
+            Write-Summary ""
+            Write-Summary "The harness process has exited successfully. Verification happens asynchronously — check the verification service for the actual result."
+          }

@@ -199,6 +199,50 @@ and `.venv` on every single run. The checkout step explicitly sets
   there's an actual need to gate something (e.g. a downstream deployment
   step) on the verdict.
 
+## Addendum (session 15, GitHub Copilot PR review)
+
+A round of PR review on this ADR's implementation surfaced three issues,
+all fixed the same session:
+
+- **PowerShell command injection via dispatch inputs.** The "Stamp a new
+  run manifest" and "Summary" steps interpolated `${{ inputs.pipeline_build }}`
+  etc. directly into their `run:` scripts. A `${{ }}` expression is
+  substituted into a step's script as raw text *before* PowerShell parses
+  it — so a dispatch input containing a quote and a statement terminator
+  (e.g. `foo"; Remove-Item -Recurse C:\; #`) could break out of the
+  quoted argument and run arbitrary commands on the self-hosted runner.
+  Fixed by exposing the three inputs as job-level `env:` variables
+  (`PIPELINE_BUILD`, `SCENARIO`, `RUN_TYPE`) and reading them via
+  `$env:...` inside both scripts instead — an actual environment variable
+  read at runtime, not a text splice into the script source. Since
+  `workflow_dispatch` can be triggered by anyone with write access to the
+  repo (not just the person who wrote this workflow), this was a real,
+  not theoretical, risk on a runner that also has the credentials in
+  `config/local_config.yaml`.
+- **The stamping script's collision check was narrower than what the
+  live service actually watches.** `stamp_manifest_for_run.py`'s safety
+  check globbed `context_manifest_run_*.json`, but `manifest_watcher.py`
+  registers *any* `context_manifest_*.json` it finds — the prefix/suffix
+  match, not a "contains `run_`" match. A stale or hand-dropped file like
+  `context_manifest_old.json` would sail past the stamping script's check
+  (allowing a new manifest to be stamped) while still being exactly the
+  kind of unarchived file the safety check exists to catch, defeating it.
+  Fixed by using the same non-recursive `context_manifest_*.json` glob as
+  `manifest_watcher.py`'s `MANIFEST_PREFIX`/`MANIFEST_SUFFIX`. Verified
+  against a scratch manifests_dir with exactly this file name.
+- **The job summary always printed success text.** The "Summary" step
+  runs `if: always()` so it still executes after an earlier step fails,
+  but it unconditionally wrote "Regression run triggered" / "The harness
+  process has exited" regardless of what actually happened — including
+  when stamping failed (no manifest, harness never started) or the
+  harness step failed or hit its timeout. That is exactly backwards for
+  what a job summary is for: it needs to be most informative during the
+  failure modes an operator is checking it for. Fixed by giving the
+  harness step an `id` and branching the summary on `steps.stamp.outcome`
+  / `steps.harness.outcome`, with distinct failure-specific text for
+  "stamping failed" vs. "harness didn't complete successfully" vs. the
+  original success case.
+
 ## Relationship to other ADRs
 - Fulfils the future automation ADR-015 explicitly designed for: "the
   test generator is purely additive... no verification service code

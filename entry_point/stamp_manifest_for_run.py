@@ -111,7 +111,15 @@ def main() -> int:
     # so processed/timed_out/failed are correctly excluded — only a manifest
     # the service hasn't finished with yet (or a crash left behind) will
     # match here.
-    pending = sorted(manifests_dir.glob("context_manifest_run_*.json"))
+    # Same prefix/suffix glob as manifest_watcher.py's MANIFEST_PREFIX/
+    # MANIFEST_SUFFIX (non-recursive, so processed/timed_out/failed are
+    # still correctly excluded) — not narrowed to "run_" names. The live
+    # service registers *any* context_manifest_*.json it finds at the top
+    # level, so a stale or malformed file that doesn't match the run_id
+    # naming convention (e.g. a hand-dropped context_manifest_old.json)
+    # would otherwise slip past this check and defeat the collision
+    # safeguard entirely (PR review, session 15).
+    pending = sorted(manifests_dir.glob("context_manifest_*.json"))
     if pending:
         print("Error: refusing to stamp a new manifest — the following "
               "manifest(s) are still unarchived in "
