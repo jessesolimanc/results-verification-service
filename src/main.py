@@ -150,6 +150,60 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
     timed_out_dir.mkdir(parents=True, exist_ok=True)
     failed_dir.mkdir(parents=True, exist_ok=True)
 
+    def _reconcile_processed_manifests() -> None:
+        """
+        Startup self-healing (ADR-024 addendum, session 16).
+
+        A manifest can end up sitting unarchived at the top of
+        manifests_dir even though its run_id is already in
+        processed_run_ids — i.e. verify_run() already wrote its results
+        to the DB. The main way this happens: a stop signal (Ctrl+C, or
+        NSSM's equivalent on a service stop) arrives while on_confirmed()
+        is awaiting asyncio.to_thread(verify_run, ...). asyncio.run()'s
+        shutdown still lets that worker thread finish — so the DB write
+        completes — but the cancellation unwinds past on_confirmed()'s
+        try/except/else entirely (CancelledError is a BaseException, not
+        an Exception, so it isn't caught there), and the follow-up
+        _archive(run_id, processed_dir) call never runs.
+
+        Left alone this is permanent: nothing ever revisits an already-
+        registered manifest, and stamp_manifest_for_run.py's safety check
+        refuses every future dispatch because of it, even though the run
+        it's complaining about is actually done. Reconciling here, before
+        anything is registered as "expected," fixes this on the very next
+        restart — including recovering from causes other than a clean
+        Ctrl+C, e.g. the process being killed outright.
+
+        Uses the same context_manifest_*.json glob as manifest_watcher.py
+        (not narrowed to *_run_* names) so this catches exactly the set
+        of files the live watcher would otherwise pick up.
+        """
+        for path in sorted(manifests_dir.glob("context_manifest_*.json")):
+            try:
+                manifest = json.loads(path.read_text())
+                run_id = manifest["run"]["run_id"]
+            except (json.JSONDecodeError, OSError, KeyError) as e:
+                # Not this function's job to fix a malformed/partially
+                # written file — handle_new_manifest's own retry-with-
+                # backoff handles that once the watcher picks it up
+                # normally.
+                print(f"Startup reconciliation: skipping unreadable "
+                      f"{path.name}: {e}")
+                continue
+
+            if run_id in processed_run_ids:
+                try:
+                    shutil.move(str(path), str(processed_dir / path.name))
+                    print(f"Startup reconciliation: {path.name} (run "
+                          f"{run_id}) was already verified but left "
+                          f"unarchived — moved to "
+                          f"{processed_dir / path.name}")
+                except OSError as e:
+                    print(f"Warning: could not reconcile/archive "
+                          f"{path}: {e}")
+
+    _reconcile_processed_manifests()
+
     def _archive(run_id: str, destination: Path) -> None:
         """Drop a finished run's in-memory state and move its manifest aside."""
         in_progress.pop(run_id, None)

@@ -109,6 +109,103 @@ it's not running in a visible terminal; there is no structured logging
 today (everything is a `print()` call) — worth a future improvement, but
 out of scope here.
 
+## Addendum (session 15, GitHub Copilot PR review)
+
+A round of PR review surfaced five comments on the shutdown handling and
+both scripts.
+
+**Comment on `main.py`'s shutdown (raised, not yet fixed — open
+decision):** on Ctrl+C, `asyncio.run()` cancels the task awaiting
+`asyncio.to_thread(verify_run, ...)` even though executor shutdown still
+waits for the worker thread to finish. `verify_run()`'s DB writes
+complete (nothing is lost), but the cancellation unwinds past
+`on_confirmed()`'s `try/except Exception`/`else` entirely —
+`CancelledError` is a `BaseException`, not an `Exception` — so
+`_archive(run_id, processed_dir)` never runs. The manifest is left
+unarchived even though the DB already has the run recorded, and
+`stamp_manifest_for_run.py`'s safety check then refuses every future
+dispatch until a human notices and moves the file by hand.
+
+Discussed rather than immediately fixed: is this worth the cost of
+proper in-flight-task tracking, given the service is meant to run
+unattended in the background? Conclusion: yes, it can still matter,
+because a stop signal doesn't require anyone to be paying attention —
+a Windows Update reboot sends every service a stop signal automatically,
+translated by NSSM into the same Ctrl+C-style signal this service
+catches. But the actual damage is bounded: no data is lost (verify_run's
+writes already completed), and the failure isn't silent forever — the
+next dispatch attempt fails loudly, naming the stuck file.
+
+**Fixed (session 16)** with the cheaper, more general mitigation
+discussed above rather than full task-tracking through shutdown: a new
+`_reconcile_processed_manifests()` in `run_service()`, run once at
+startup before anything is registered as "expected." It scans
+`manifests_dir`'s top level (same `context_manifest_*.json` glob as
+`manifest_watcher.py` — not narrowed to `*_run_*` names) and, for any
+manifest whose `run_id` is already in `processed_run_ids`, moves it
+straight to `processed/`. A malformed/unreadable file is skipped rather
+than erroring — that's `handle_new_manifest`'s own retry-with-backoff
+logic's job once the live watcher picks it up normally, not this
+function's. This recovers from any cause of an orphaned-but-actually-done
+manifest, not just the Ctrl+C race this comment specifically raised (a
+hard kill would leave the exact same symptom). Verified against a
+scratch manifests_dir with three files — an already-processed run (gets
+archived), a still-pending run (correctly left alone), and a malformed
+file (skipped without crashing) — all behaving as intended.
+
+**Fixed the same session:**
+
+- **No exit-code checking on any native command.** `$ErrorActionPreference = "Stop"`
+  only converts PowerShell's own terminating errors — it does not turn a
+  native command's (here, every `nssm` call, plus `python -m venv` and
+  `pip install`) nonzero exit code into anything that stops the script.
+  A failed `nssm install`/`set`/`stop` could leave the service missing or
+  half-configured while `install_verification_service.ps1` still printed
+  "configured." Fixed with an `Invoke-Nssm` helper (and a generic
+  `Invoke-Checked` for the venv/pip calls) that checks `$LASTEXITCODE`
+  immediately after every native call and throws before the script can
+  proceed or report success. Verified against a fake `nssm` binary
+  returning a controlled nonzero exit code — confirmed the script aborts
+  with a clear message rather than continuing.
+- **Reconfiguring a running service silently left it stopped.** The
+  script always stopped a running service before reconfiguring it, but
+  only restarted afterward if `-Start` was explicitly passed — so a
+  routine "let me adjust the stop timeout" re-run would leave this
+  always-on listener stopped, with dispatched runs never processed,
+  until someone happened to notice. Fixed by recording whether the
+  service was running before the script touched it and restoring that
+  state afterward, independent of `-Start` (which now only matters for a
+  fresh install or a service that was already stopped). Verified all five
+  state-transition cases (fresh install with/without `-Start`; reconfigure
+  of a running/stopped service with/without `-Start`) against the exact
+  decision logic in isolation.
+- **Buffered stdout hid live log output.** NSSM redirects stdout/stderr
+  to a file rather than a terminal, and Python's stdout is block-buffered
+  (not line-buffered) whenever it isn't attached to a real terminal — so
+  `main.py`'s only form of logging (`print()`) could sit invisibly in a
+  buffer well after the fact it describes, undermining the log files as
+  a live view into the service. Fixed by adding `-u` (unbuffered) to the
+  Python invocation, applied consistently to both the initial `nssm
+  install` and the `nssm set ... AppParameters` call that actually takes
+  effect either way.
+- **Same missing exit-code checks in the uninstall script.** A failed
+  `nssm stop` didn't stop the script from attempting `nssm remove`
+  anyway, and a failed `nssm remove` didn't stop it from printing "Done"
+  with the service still registered. Fixed with the same `Invoke-Nssm`
+  pattern. Verified end-to-end against a mocked `nssm`/`Get-Service`: a
+  failing stop aborts before remove ever runs, a failing remove aborts
+  without ever printing "Done," and the success path behaves as before.
+
+Unlike the previous round (ADR-023's PR review), these fixes were
+actually exercised with a real PowerShell interpreter (PowerShell 7,
+installed temporarily into this session's own Linux environment) rather
+than reasoned through by inspection alone — both scripts parse-check
+cleanly, `Invoke-Nssm`'s exit-code handling was tested against a fake
+`nssm` returning a controlled failure, and the start/stop state logic was
+tested against all five relevant cases in isolation. This still isn't
+the same as running the real script against real NSSM and a real Windows
+service, which remains unverified.
+
 ## What this doesn't do
 - **Does not touch `--init` or `--register`.** Those remain interactive,
   manually-run commands — the service wrapper only wraps `--run`.
