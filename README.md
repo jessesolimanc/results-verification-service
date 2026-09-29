@@ -15,10 +15,14 @@ results-verification-service/
 ├── docs/               Architecture, schema reference, ADRs, glossary
 ├── schema/             SQLite DDL
 ├── config/             Configuration (paths, polling interval, tolerances)
+├── entry_point/        Manifest template + stamping script for the
+│                       GitHub Actions trigger (ADR-023) — see below
+├── .github/workflows/  trigger_regression_run.yml — manual workflow_dispatch
+│                       entry point, runs on the regression machine itself
 ├── src/
-│   ├── main.py         Entry point
+│   ├── main.py         Service entry point (the always-on listener/orchestrator)
 │   ├── registration/   Gold standard registration tool
-│   ├── listener/       Polls pipeline DB for completed runs
+│   ├── listener/       Listens for pipeline DB NOTIFY events
 │   ├── gate/           Pre-verification integrity checks
 │   ├── orchestrator/   Coordinates the verification flow
 │   ├── comparator/     Per-sample comparison logic
@@ -27,6 +31,24 @@ results-verification-service/
 │   └── database/       All database interaction
 └── tests/              Unit tests
 ```
+
+## Triggering a regression run
+
+Runs are started manually with the "Trigger Regression Run" GitHub Actions
+workflow (`workflow_dispatch`), after a build has been produced and
+installed on the regression machine by hand — this workflow does not
+build or install anything itself. Dispatching it stamps a new manifest
+from `entry_point/manifest_template.json` and starts the test harness;
+it does not wait for verification to complete. See ADR-023 for the full
+design and its `entry_point/stamp_manifest_for_run.py` --help for the
+same script run locally/manually.
+
+Requires a self-hosted GitHub Actions runner registered on the regression
+machine (labels `self-hosted, pcr-regression`) and two repository
+variables set (Settings → Secrets and variables → Actions → Variables):
+`PCR_MANIFESTS_DIR` (matching `config.paths.manifests_dir` on that
+machine) and `PCR_TEST_HARNESS_EXE_PATH` (where the built test harness
+executable lives there).
 
 ## Data directory
 

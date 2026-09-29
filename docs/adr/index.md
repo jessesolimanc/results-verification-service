@@ -26,3 +26,4 @@ Architecture Decision Records for the results verification service.
 | [ADR-020](ADR-020-metafolder-deferred.md) | Metafolder timing and RnDdata access — deferred | Accepted — deferred beyond current OKR scope |
 | [ADR-021](ADR-021-comparison-scope-and-aggregate-strategies.md) | Comparison registry extension: sample vs aggregate scope | Proposed — rough shaping, not required for current OKR scope |
 | [ADR-022](ADR-022-explicit-manifest-handoff.md) | Explicit manifest hand-off replaces run_id stamping for run correlation | Accepted |
+| [ADR-023](ADR-023-github-actions-entry-point.md) | GitHub Actions as the manual regression-run entry point | Accepted |
