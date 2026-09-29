@@ -15,7 +15,7 @@ import yaml
 from pathlib import Path
 
 from src.database.db import get_connection, initialise_database
-from src.database.models import get_all_processed_run_ids
+from src.database.models import get_all_processed_run_ids, get_all_reported_run_ids
 from src.listener.listener import listen_async, listen_async_mock
 from src.orchestrator.orchestrator import verify_run
 from src.orchestrator.watcher import watch_and_confirm
@@ -134,6 +134,7 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
     """
     with get_connection(config["paths"]["database"]) as conn:
         processed_run_ids = get_all_processed_run_ids(conn)
+        reported_run_ids = get_all_reported_run_ids(conn)
 
     in_progress = {}                 # {run_id: set of exp_ids notified}
     confirmed_ready = {}             # {run_id: set of exp_ids confirmed on F:}
@@ -152,15 +153,16 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
 
     def _reconcile_processed_manifests() -> None:
         """
-        Startup self-healing (ADR-024 addendum, session 16).
+        Startup self-healing (ADR-024 addendum, sessions 16-17).
 
         A manifest can end up sitting unarchived at the top of
         manifests_dir even though its run_id is already in
-        processed_run_ids — i.e. verify_run() already wrote its results
-        to the DB. The main way this happens: a stop signal (Ctrl+C, or
-        NSSM's equivalent on a service stop) arrives while on_confirmed()
-        is awaiting asyncio.to_thread(verify_run, ...). asyncio.run()'s
-        shutdown still lets that worker thread finish — so the DB write
+        processed_run_ids — i.e. verify_run() already committed its
+        runs/experiment_results/sample_results transaction. The main way
+        this happens: a stop signal (Ctrl+C, or NSSM's equivalent on a
+        service stop) arrives while on_confirmed() is awaiting
+        asyncio.to_thread(verify_run, ...). asyncio.run()'s shutdown
+        still lets that worker thread finish — so the DB write
         completes — but the cancellation unwinds past on_confirmed()'s
         try/except/else entirely (CancelledError is a BaseException, not
         an Exception, so it isn't caught there), and the follow-up
@@ -174,15 +176,31 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
         restart — including recovering from causes other than a clean
         Ctrl+C, e.g. the process being killed outright.
 
+        A run row alone isn't proof the run is fully done, though:
+        verify_run() commits runs/experiment_results/sample_results in
+        one transaction and only afterward calls write_report(), which
+        writes the CSVs and inserts into reports as a separate,
+        later transaction. A hard kill in that gap leaves a runs row
+        with no report. Archiving a manifest on the strength of the
+        runs row alone would permanently hide that half-finished state,
+        so this function requires both processed_run_ids (from runs)
+        and reported_run_ids (from reports) before it will archive —
+        a run_id in the former but not the latter is left unarchived
+        and flagged for a human to investigate instead.
+
         Uses the same context_manifest_*.json glob as manifest_watcher.py
         (not narrowed to *_run_* names) so this catches exactly the set
-        of files the live watcher would otherwise pick up.
+        of files the live watcher would otherwise pick up. Any manifest
+        that fails to parse or is missing/malformed structure (bad JSON,
+        an unreadable file, or a shape that doesn't match what's
+        expected, e.g. {"run": null}) is skipped rather than raised —
+        one broken file must never prevent the service from starting.
         """
         for path in sorted(manifests_dir.glob("context_manifest_*.json")):
             try:
                 manifest = json.loads(path.read_text())
                 run_id = manifest["run"]["run_id"]
-            except (json.JSONDecodeError, OSError, KeyError) as e:
+            except (json.JSONDecodeError, OSError, KeyError, TypeError) as e:
                 # Not this function's job to fix a malformed/partially
                 # written file — handle_new_manifest's own retry-with-
                 # backoff handles that once the watcher picks it up
@@ -191,16 +209,34 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
                       f"{path.name}: {e}")
                 continue
 
-            if run_id in processed_run_ids:
+            if run_id in processed_run_ids and run_id in reported_run_ids:
                 try:
                     shutil.move(str(path), str(processed_dir / path.name))
                     print(f"Startup reconciliation: {path.name} (run "
-                          f"{run_id}) was already verified but left "
-                          f"unarchived — moved to "
+                          f"{run_id}) was already verified and reported "
+                          f"but left unarchived — moved to "
                           f"{processed_dir / path.name}")
                 except OSError as e:
                     print(f"Warning: could not reconcile/archive "
                           f"{path}: {e}")
+            elif run_id in processed_run_ids:
+                # insert_run() committed but write_report() never
+                # completed -- e.g. the process was hard-killed in the
+                # gap between the two. The run is NOT actually done,
+                # so archiving it here would hide the missing report
+                # forever (nothing else ever revisits an archived
+                # manifest). Leave it in place instead: it stays
+                # unarchived, so stamp_manifest_for_run.py's safety
+                # check keeps refusing new runs, same as before this
+                # function ran -- which is the point, since this state
+                # needs a human to look at the runs/reports tables for
+                # this run_id and decide whether to re-verify or clean
+                # it up by hand.
+                print(f"Warning: {path.name} (run {run_id}) has a "
+                      f"runs row but no report — verification likely "
+                      f"completed but reporting did not. Leaving "
+                      f"manifest in place for investigation; NOT "
+                      f"archiving.")
 
     _reconcile_processed_manifests()
 

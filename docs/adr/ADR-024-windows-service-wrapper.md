@@ -206,6 +206,56 @@ tested against all five relevant cases in isolation. This still isn't
 the same as running the real script against real NSSM and a real Windows
 service, which remains unverified.
 
+## Addendum (session 17, GitHub Copilot PR review)
+
+Two more Copilot comments, this time on `_reconcile_processed_manifests()`
+itself (the session-16 reconciliation fix above):
+
+- **A structurally malformed-but-valid-JSON manifest crashed startup.**
+  The original `except (json.JSONDecodeError, OSError, KeyError)` doesn't
+  catch `TypeError`, which is exactly what `manifest["run"]["run_id"]`
+  raises when `manifest["run"]` is present but not a dict — `{"run":
+  null}` being the concrete example. That contradicts the function's own
+  stated promise that a malformed file is skipped, not fatal: one bad
+  manifest sitting in `manifests_dir` would abort `run_service()` on
+  every single restart. Fixed by adding `TypeError` to the except tuple.
+  Verified with a scratch manifest containing `{"run": null}` (skipped,
+  no crash) alongside truly invalid JSON and a manifest missing the
+  `"run"` key entirely (both still skipped as before).
+
+- **Reconciliation could archive a manifest whose report was never
+  written.** `processed_run_ids` only proves `insert_run()` committed.
+  `verify_run()` commits `runs`/`experiment_results`/`sample_results` in
+  one transaction and calls `write_report()` afterward, separately —
+  `write_report()` writes the CSVs and then inserts into `reports` in its
+  own transaction (confirmed by reading `src/reporter/reporter.py` and
+  `src/database/models.py` directly). A hard kill between those two
+  points leaves a `runs` row with no report. Reconciliation was
+  archiving on `processed_run_ids` alone, which would have permanently
+  hidden that half-finished state — nothing else ever revisits an
+  archived manifest.
+
+  Fixed by adding `get_all_reported_run_ids(conn)` to
+  `src/database/models.py` (`SELECT DISTINCT run_id FROM reports`,
+  backed by the existing `idx_reports_run` index) and loading it in
+  `run_service()` alongside `processed_run_ids`, from the same
+  connection. `_reconcile_processed_manifests()` now only archives a
+  manifest when its `run_id` is in *both* sets; a `run_id` in
+  `processed_run_ids` but not `reported_run_ids` is left unarchived and
+  logged as a warning for a human to investigate, rather than silently
+  disappearing. Leaving it unarchived also means
+  `stamp_manifest_for_run.py`'s safety check keeps refusing new runs
+  until someone resolves it — the same behavior as before reconciliation
+  existed, which is the right default for a state that needs a decision,
+  not automatic cleanup.
+
+  Verified against a scratch `manifests_dir` with four cases: a run with
+  both a `runs` row and a report (archived), a run with a `runs` row but
+  no report (left in place, warning logged), a run in neither set (left
+  alone, no warning — the normal still-pending case), and the malformed
+  manifests from the fix above (skipped, not crashed) — all in the same
+  test run, all behaving as intended.
+
 ## What this doesn't do
 - **Does not touch `--init` or `--register`.** Those remain interactive,
   manually-run commands — the service wrapper only wraps `--run`.

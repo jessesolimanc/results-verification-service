@@ -86,6 +86,20 @@ def get_all_processed_run_ids(conn) -> set:
     return {row["run_id"] for row in rows}
 
 
+def get_all_reported_run_ids(conn) -> set:
+    """
+    Return the set of run_ids that have a completed report.
+
+    A row in runs only proves verify_run() committed its run/results
+    transaction; write_report() (CSVs + the reports table row) happens
+    afterward, in a separate transaction. Reconciliation logic that needs
+    to know a run is fully done -- not just recorded -- should check this
+    set as well as get_all_processed_run_ids(), not the runs table alone.
+    """
+    rows = conn.execute("SELECT DISTINCT run_id FROM reports").fetchall()
+    return {row["run_id"] for row in rows}
+
+
 def insert_run(conn, record: dict) -> None:
     """Insert a new run record."""
     try:
