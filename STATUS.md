@@ -205,6 +205,7 @@ Current phase: Phase 3 hardening (complete) moving into entry-point + deployment
 Third PR review round on the Windows Service work (ADR-024 addendum, session 18):
 - Install script now restores a previously-running service in a `finally`, so a failed `nssm set` can't leave the listener stopped (tested with PowerShell 7 + mocks, six cases).
 - Malformed manifests (`{"run": null}`, invalid UTF-8) can no longer hang or crash startup: shared `_manifest_identity()` validator, per-file guard in the watcher's catch-up scan, and `run_service()` no longer waits forever if the watcher dies before ready.
+- A failed restore of a previously-running service now fails the script (when configuration succeeded) instead of warning; the script also verifies the service is Running before reporting success. Nine mock cases tested.
 - Not yet run against real NSSM / the regression machine.
 
 Second PR review round on the session-16 reconciliation fix (ADR-024 addendum, session 17):

@@ -271,6 +271,16 @@ Three more comments; all verified against the code and accurate.
   mocked `nssm`/`Get-Service`/`Start-Service` over six cases (running or
   stopped x `set` failing or not x `-Start`); the key case (running, `set`
   fails) ends Running with the error still thrown.
+- **Failed restore was only a warning.** If configuration succeeded but
+  the restart in the `finally` failed, the script printed a warning and
+  still exited successfully with the listener stopped. The failure is now
+  recorded and thrown on the success path (when configuration itself
+  failed, the original error still propagates untouched). The success
+  path also verifies the service is actually `Running` after starting it,
+  since NSSM can report a start and the child process still exit at once.
+  Tested over nine mock cases, including restart failing, restart
+  "succeeding" but the service stopping, and both combined with a
+  configuration failure.
 - **Malformed manifest hung startup.** Skipping a bad file during
   reconciliation left it in place, so the catch-up watcher passed it to
   `handle_new_manifest()`, which still indexed `manifest["run"]["run_id"]`.

@@ -132,6 +132,7 @@ New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
 $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 $wasRunning = $false
 $configured = $false
+$restoreFailure = $null
 
 try {
     if ($existing) {
@@ -205,22 +206,38 @@ try {
                 Start-Service $ServiceName -ErrorAction Stop
             }
         } catch {
-            Write-Warning "Could not restore the running state of '$ServiceName': $_ - start it manually with: Start-Service $ServiceName"
+            # Remembered, not just warned: if configuration succeeded this
+            # is the only error, so the success path below must fail on it.
+            # If configuration failed, the original error is still in
+            # flight and propagates after this finally block untouched.
+            $restoreFailure = "Could not restore the running state of '$ServiceName': $_"
+            Write-Warning "$restoreFailure - start it manually with: Start-Service $ServiceName"
         }
     }
 }
 
-# Success path. A service that was running was already restored above;
-# -Start additionally starts a fresh install / one that was already
-# stopped (never after a failed configuration — we only get here on
-# success).
+# Success path (only reached when configuration succeeded — a failure
+# above propagates its own error). A service that was running before was
+# restored in the finally block; if that restore failed, fail here rather
+# than report success with the always-on listener stopped (PR review,
+# session 18).
+if ($restoreFailure) {
+    throw $restoreFailure
+}
+
 if ($wasRunning -or $Start) {
     if (-not $wasRunning) {
         Write-Host "Starting service..."
         Start-Service $ServiceName
     }
     Start-Sleep -Seconds 2
-    Get-Service $ServiceName
+    # Verify rather than assume: NSSM can report a successful start and
+    # the child process still exit immediately (bad config, missing venv).
+    $final = Get-Service $ServiceName
+    $final
+    if ($final.Status -ne "Running") {
+        throw "Service '$ServiceName' is not running after start (status: $($final.Status)). Check $LogsDir for service_stderr.log."
+    }
 } else {
     Write-Host "Service left stopped (it wasn't running before this script ran, and -Start wasn't passed)."
     Write-Host "  Start it with: Start-Service $ServiceName"
