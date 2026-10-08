@@ -27,3 +27,4 @@ Architecture Decision Records for the results verification service.
 | [ADR-021](ADR-021-comparison-scope-and-aggregate-strategies.md) | Comparison registry extension: sample vs aggregate scope | Proposed — rough shaping, not required for current OKR scope |
 | [ADR-022](ADR-022-explicit-manifest-handoff.md) | Explicit manifest hand-off replaces run_id stamping for run correlation | Accepted |
 | [ADR-023](ADR-023-github-actions-entry-point.md) | GitHub Actions as the manual regression-run entry point | Accepted |
+| [ADR-024](ADR-024-windows-service-wrapper.md) | NSSM-wrapped Windows Service for the verification service | Accepted |

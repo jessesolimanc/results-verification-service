@@ -15,7 +15,7 @@ import yaml
 from pathlib import Path
 
 from src.database.db import get_connection, initialise_database
-from src.database.models import get_all_processed_run_ids
+from src.database.models import get_all_processed_run_ids, get_all_reported_run_ids
 from src.listener.listener import listen_async, listen_async_mock
 from src.orchestrator.orchestrator import verify_run
 from src.orchestrator.watcher import watch_and_confirm
@@ -78,9 +78,66 @@ def register(config: dict) -> None:
 
 
 def run(config: dict) -> None:
-    """Start the verification service listener loop."""
+    """
+    Start the verification service listener loop.
+
+    Catches Ctrl+C / a console-close-style interrupt so a normal shutdown
+    request prints a clean message instead of dumping a KeyboardInterrupt
+    traceback. This matters once the service runs unattended under a
+    service wrapper (ADR-024): that's how NSSM's default stop method
+    signals a running console app to shut down.
+
+    Note on what actually happens underneath: asyncio.run()'s own cleanup
+    (not this except block) is what does the real work — on interrupt it
+    cancels the still-running run_service() coroutine at whatever await
+    point it's suspended, which lets run_service()'s own
+    `finally: manifest_watch_task.cancel()` execute, which in turn lets
+    watch_manifests_dir()'s finally (observer.stop()/join()) execute. It
+    also cancels manifest_watch_task directly and, since Python 3.9,
+    calls loop.shutdown_default_executor() before returning — which waits
+    for any verify_run() currently in flight on its worker thread
+    (asyncio.to_thread) to actually finish, rather than killing it
+    mid-write. None of that is untested-in-theory: it's Python's
+    documented asyncio.run() shutdown sequence, not something this
+    project added. What this except block adds on top is purely cosmetic
+    — a clean log line instead of a traceback — since the token: Event
+    passed to listen_async() is never actually set anywhere; shutdown
+    goes through task cancellation, not the token.
+    """
     token = asyncio.Event()
-    asyncio.run(run_service(config, token))
+    try:
+        asyncio.run(run_service(config, token))
+    except KeyboardInterrupt:
+        print("Shutdown requested — verification service stopping.")
+
+
+def _manifest_identity(manifest) -> tuple:
+    """
+    Validate a parsed manifest's structure and return (run_id, experiment_ids).
+
+    Raises ValueError for any shape that isn't usable — a non-object
+    document, a non-object "run", a missing/non-string run_id, or a
+    missing/malformed "experiments" list. Callers treat ValueError as
+    "malformed manifest: skip it", so one bad file can never escape as a
+    stray TypeError/KeyError/AttributeError and abort service startup.
+    """
+    if not isinstance(manifest, dict):
+        raise ValueError("manifest is not a JSON object")
+    run = manifest.get("run")
+    if not isinstance(run, dict):
+        raise ValueError('"run" is missing or not an object')
+    run_id = run.get("run_id")
+    if not isinstance(run_id, str) or not run_id:
+        raise ValueError('"run.run_id" is missing or not a non-empty string')
+    experiments = manifest.get("experiments")
+    if not isinstance(experiments, list):
+        raise ValueError('"experiments" is missing or not a list')
+    experiment_ids = set()
+    for exp in experiments:
+        if not isinstance(exp, dict) or not isinstance(exp.get("experiment_id"), str):
+            raise ValueError('an "experiments" entry has no string experiment_id')
+        experiment_ids.add(exp["experiment_id"])
+    return run_id, experiment_ids
 
 
 async def run_service(config: dict, token: asyncio.Event) -> None:
@@ -106,6 +163,7 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
     """
     with get_connection(config["paths"]["database"]) as conn:
         processed_run_ids = get_all_processed_run_ids(conn)
+        reported_run_ids = get_all_reported_run_ids(conn)
 
     in_progress = {}                 # {run_id: set of exp_ids notified}
     confirmed_ready = {}             # {run_id: set of exp_ids confirmed on F:}
@@ -121,6 +179,98 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
     processed_dir.mkdir(parents=True, exist_ok=True)
     timed_out_dir.mkdir(parents=True, exist_ok=True)
     failed_dir.mkdir(parents=True, exist_ok=True)
+
+    def _reconcile_processed_manifests() -> None:
+        """
+        Startup self-healing (ADR-024 addendum, sessions 16-17).
+
+        A manifest can end up sitting unarchived at the top of
+        manifests_dir even though its run_id is already in
+        processed_run_ids — i.e. verify_run() already committed its
+        runs/experiment_results/sample_results transaction. The main way
+        this happens: a stop signal (Ctrl+C, or NSSM's equivalent on a
+        service stop) arrives while on_confirmed() is awaiting
+        asyncio.to_thread(verify_run, ...). asyncio.run()'s shutdown
+        still lets that worker thread finish — so the DB write
+        completes — but the cancellation unwinds past on_confirmed()'s
+        try/except/else entirely (CancelledError is a BaseException, not
+        an Exception, so it isn't caught there), and the follow-up
+        _archive(run_id, processed_dir) call never runs.
+
+        Left alone this is permanent: nothing ever revisits an already-
+        registered manifest, and stamp_manifest_for_run.py's safety check
+        refuses every future dispatch because of it, even though the run
+        it's complaining about is actually done. Reconciling here, before
+        anything is registered as "expected," fixes this on the very next
+        restart — including recovering from causes other than a clean
+        Ctrl+C, e.g. the process being killed outright.
+
+        A run row alone isn't proof the run is fully done, though:
+        verify_run() commits runs/experiment_results/sample_results in
+        one transaction and only afterward calls write_report(), which
+        writes the CSVs and inserts into reports as a separate,
+        later transaction. A hard kill in that gap leaves a runs row
+        with no report. Archiving a manifest on the strength of the
+        runs row alone would permanently hide that half-finished state,
+        so this function requires both processed_run_ids (from runs)
+        and reported_run_ids (from reports) before it will archive —
+        a run_id in the former but not the latter is left unarchived
+        and flagged for a human to investigate instead.
+
+        Uses the same context_manifest_*.json glob as manifest_watcher.py
+        (not narrowed to *_run_* names) so this catches exactly the set
+        of files the live watcher would otherwise pick up. Any manifest
+        that fails to parse or is missing/malformed structure (bad JSON,
+        an unreadable file, or a shape that doesn't match what's
+        expected, e.g. {"run": null}) is skipped rather than raised —
+        one broken file must never prevent the service from starting.
+        """
+        for path in sorted(manifests_dir.glob("context_manifest_*.json")):
+            try:
+                manifest = json.loads(path.read_text())
+                run_id, _ = _manifest_identity(manifest)
+            except (ValueError, OSError) as e:
+                # ValueError covers JSONDecodeError, UnicodeDecodeError
+                # (invalid UTF-8) and _manifest_identity's structural
+                # checks (e.g. {"run": null}).
+                # Not this function's job to fix a malformed/partially
+                # written file — handle_new_manifest's own retry-with-
+                # backoff handles that once the watcher picks it up
+                # normally.
+                print(f"Startup reconciliation: skipping unreadable "
+                      f"{path.name}: {e}")
+                continue
+
+            if run_id in processed_run_ids and run_id in reported_run_ids:
+                try:
+                    shutil.move(str(path), str(processed_dir / path.name))
+                    print(f"Startup reconciliation: {path.name} (run "
+                          f"{run_id}) was already verified and reported "
+                          f"but left unarchived — moved to "
+                          f"{processed_dir / path.name}")
+                except OSError as e:
+                    print(f"Warning: could not reconcile/archive "
+                          f"{path}: {e}")
+            elif run_id in processed_run_ids:
+                # insert_run() committed but write_report() never
+                # completed -- e.g. the process was hard-killed in the
+                # gap between the two. The run is NOT actually done,
+                # so archiving it here would hide the missing report
+                # forever (nothing else ever revisits an archived
+                # manifest). Leave it in place instead: it stays
+                # unarchived, so stamp_manifest_for_run.py's safety
+                # check keeps refusing new runs, same as before this
+                # function ran -- which is the point, since this state
+                # needs a human to look at the runs/reports tables for
+                # this run_id and decide whether to re-verify or clean
+                # it up by hand.
+                print(f"Warning: {path.name} (run {run_id}) has a "
+                      f"runs row but no report — verification likely "
+                      f"completed but reporting did not. Leaving "
+                      f"manifest in place for investigation; NOT "
+                      f"archiving.")
+
+    _reconcile_processed_manifests()
 
     def _archive(run_id: str, destination: Path) -> None:
         """Drop a finished run's in-memory state and move its manifest aside."""
@@ -156,7 +306,7 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
             try:
                 manifest = json.loads(path.read_text())
                 break
-            except (json.JSONDecodeError, OSError) as e:
+            except (json.JSONDecodeError, UnicodeError, OSError) as e:
                 last_error = e
                 await asyncio.sleep(delay)
         else:
@@ -164,12 +314,19 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
                   f"{len(MANIFEST_READ_RETRY_DELAYS)} attempts: {last_error}")
             return
 
-        run_id = manifest["run"]["run_id"]
+        try:
+            run_id, expected = _manifest_identity(manifest)
+        except ValueError as e:
+            # Must not raise: during the startup catch-up scan an escaping
+            # exception would kill the watcher before it signals ready,
+            # and run_service() would never start the listener.
+            print(f"Warning: manifest {path.name} is malformed ({e}) — "
+                  f"skipping registration. Fix or remove it and re-drop "
+                  f"it to retry.")
+            return
 
         if run_id in processed_run_ids or run_id in manifests:
             return  # already verified, or already registered
-
-        expected = {e["experiment_id"] for e in manifest["experiments"]}
 
         conflicts = expected & expected_experiment_to_run.keys()
         if conflicts:
@@ -261,7 +418,15 @@ async def run_service(config: dict, token: asyncio.Event) -> None:
     manifest_watch_task = asyncio.create_task(
         watch_manifests_dir(config, handle_new_manifest, manifest_watcher_ready)
     )
-    await manifest_watcher_ready.wait()
+    ready_wait = asyncio.create_task(manifest_watcher_ready.wait())
+    await asyncio.wait({ready_wait, manifest_watch_task},
+                       return_when=asyncio.FIRST_COMPLETED)
+    if not manifest_watcher_ready.is_set():
+        # The watcher exited before signalling ready — surface its error
+        # rather than waiting forever with no listener running.
+        ready_wait.cancel()
+        manifest_watch_task.result()
+        raise RuntimeError("manifest watcher stopped before becoming ready")
 
     try:
         if config["listener"]["use_mock"]:

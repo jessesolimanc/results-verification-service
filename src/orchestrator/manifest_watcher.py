@@ -91,7 +91,13 @@ async def watch_manifests_dir(config: dict, on_new_manifest,
         # same reasoning as watcher.py's pre-check for E: drive deletion:
         # starting the observer first eliminates the race window.
         for path in sorted(watch_dir.glob(f"{MANIFEST_PREFIX}*{MANIFEST_SUFFIX}")):
-            await on_new_manifest(path)
+            try:
+                await on_new_manifest(path)
+            except Exception as e:
+                # One bad manifest must not stop the scan or block
+                # ready_event — otherwise the service never starts.
+                print(f"Warning: error registering {path.name} during "
+                      f"startup scan: {e!r} — skipping it")
 
         if ready_event is not None:
             ready_event.set()

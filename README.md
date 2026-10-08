@@ -81,10 +81,49 @@ Paths are configured in `config/config.yaml`.
    python src/main.py --register
    ```
 
-4. Start the service:
+4. Start the service (for interactive/manual use — for always-on
+   background operation, see "Running as a Windows Service" below):
    ```
    python src/main.py --run
    ```
+
+## Running as a Windows Service
+
+For the service to actually pick up runs triggered by the GitHub Actions
+workflow (see "Triggering a regression run" above), it needs to be
+running continuously in the background — not dependent on someone having
+a terminal open. This is wrapped as a Windows Service using
+[NSSM](https://nssm.cc) rather than a native Python service; see ADR-024
+for the full reasoning.
+
+One-time setup on the regression machine, as Administrator:
+
+1. Install NSSM (download from https://nssm.cc and either put `nssm.exe`
+   on PATH or note its path — this is a new tool for this machine, not
+   already present, since every other service here is a native .NET
+   service).
+2. Complete the "Setup" steps above (venv, `--init`, `--register`) if you
+   haven't already.
+3. Run:
+   ```
+   powershell -File scripts\install_verification_service.ps1
+   ```
+   (add `-NssmPath "C:\path\to\nssm.exe"` if it isn't on PATH, and
+   `-Start` to start it immediately).
+
+The script is idempotent — re-run it any time to reconfigure the service
+(e.g. after changing the stop timeout). To remove it entirely:
+```
+powershell -File scripts\uninstall_verification_service.ps1
+```
+
+Logs land in `logs\service_stdout.log` / `logs\service_stderr.log`
+under the repo root (rotated at 10 MB). Manage the service with
+`Get-Service`, `Start-Service`, `Stop-Service`, or `services.msc`.
+
+**Note:** these scripts were written and reviewed carefully but have not
+been run against the real regression machine yet — verify them there
+before relying on this for an actual triggered run.
 
 ## Dependencies
 
