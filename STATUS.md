@@ -202,6 +202,11 @@ Current phase: Phase 3 hardening (complete) moving into entry-point + deployment
 
 ## Notes
 
+Third PR review round on the Windows Service work (ADR-024 addendum, session 18):
+- Install script now restores a previously-running service in a `finally`, so a failed `nssm set` can't leave the listener stopped (tested with PowerShell 7 + mocks, six cases).
+- Malformed manifests (`{"run": null}`, invalid UTF-8) can no longer hang or crash startup: shared `_manifest_identity()` validator, per-file guard in the watcher's catch-up scan, and `run_service()` no longer waits forever if the watcher dies before ready.
+- Not yet run against real NSSM / the regression machine.
+
 Second PR review round on the session-16 reconciliation fix (ADR-024 addendum, session 17):
 - 2 more Copilot comments, both on `_reconcile_processed_manifests()`.
 - Comment 1: the except clause (`JSONDecodeError`, `OSError`, `KeyError`) didn't cover `TypeError`, which `manifest["run"]["run_id"]` raises when `"run"` is present but not a dict (`{"run": null}`) — contradicting the function's own promise to skip malformed files rather than crash startup. Fixed by adding `TypeError` to the tuple.

@@ -256,6 +256,41 @@ itself (the session-16 reconciliation fix above):
   manifests from the fix above (skipped, not crashed) — all in the same
   test run, all behaving as intended.
 
+## Addendum (session 18, GitHub Copilot PR review)
+
+Three more comments; all verified against the code and accurate.
+
+- **State restore skipped on failure (install script).** The "restore the
+  prior running state" step only ran on the success path, so a later
+  `nssm set` throwing after the service was stopped left the always-on
+  listener down. The stop/configure block is now in `try { } finally { }`;
+  the `finally` restarts a service that was running before (best-effort,
+  never masking the original error) and the original error still
+  propagates. `-Start` only applies on success, so a failed configuration
+  never starts a service that was stopped. Tested with PowerShell 7 and
+  mocked `nssm`/`Get-Service`/`Start-Service` over six cases (running or
+  stopped x `set` failing or not x `-Start`); the key case (running, `set`
+  fails) ends Running with the error still thrown.
+- **Malformed manifest hung startup.** Skipping a bad file during
+  reconciliation left it in place, so the catch-up watcher passed it to
+  `handle_new_manifest()`, which still indexed `manifest["run"]["run_id"]`.
+  `{"run": null}` raised `TypeError` before `ready_event.set()` and
+  `run_service()` waited forever. Fixed in three layers: a shared
+  `_manifest_identity()` validator (raises `ValueError` for any bad shape)
+  used by both reconciliation and the handler, which now logs and skips;
+  `watch_manifests_dir()` catches per-file callback errors in its startup
+  scan so ready is always signalled; and `run_service()` waits on
+  "ready or watcher task finished", re-raising the watcher's error instead
+  of hanging.
+- **Invalid UTF-8.** `read_text()` raises `UnicodeDecodeError`, which is
+  neither `JSONDecodeError` nor `OSError`. Reconciliation now catches
+  `ValueError` (covers it) and the handler's retry loop catches
+  `UnicodeError` (a truncated mid-write multibyte sequence is retryable).
+
+Tested standalone: 12 malformed shapes rejected, invalid-UTF-8 and
+`{"run": null}` files skipped, and the real watcher became ready despite a
+callback that raised. Not run against the live service or real NSSM.
+
 ## What this doesn't do
 - **Does not touch `--init` or `--register`.** Those remain interactive,
   manually-run commands — the service wrapper only wraps `--run`.

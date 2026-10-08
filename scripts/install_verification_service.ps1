@@ -131,71 +131,94 @@ New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
 
 $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 $wasRunning = $false
+$configured = $false
 
-if ($existing) {
-    Write-Host "Service '$ServiceName' already exists — reconfiguring in place."
-    $wasRunning = ($existing.Status -eq "Running")
-    if ($wasRunning) {
-        Write-Host "Stopping it first..."
-        Invoke-Nssm stop $ServiceName
+try {
+    if ($existing) {
+        Write-Host "Service '$ServiceName' already exists — reconfiguring in place."
+        $wasRunning = ($existing.Status -eq "Running")
+        if ($wasRunning) {
+            Write-Host "Stopping it first..."
+            Invoke-Nssm stop $ServiceName
+        }
+    } else {
+        Write-Host "Installing new service '$ServiceName'..."
+        Invoke-Nssm install $ServiceName $PythonExe $ServiceArgs
     }
-} else {
-    Write-Host "Installing new service '$ServiceName'..."
-    Invoke-Nssm install $ServiceName $PythonExe $ServiceArgs
+
+    # These `nssm set` calls run regardless of whether the service was just
+    # installed or already existed, so re-running this script always leaves
+    # the service in the same known configuration.
+    Invoke-Nssm set $ServiceName AppDirectory $RepoRoot
+    Invoke-Nssm set $ServiceName AppParameters $ServiceArgs
+    Invoke-Nssm set $ServiceName DisplayName "Countable PCR Results Verification Service"
+    Invoke-Nssm set $ServiceName Description "Always-on listener/orchestrator for the PCR regression verification service (ADR-015). See docs/adr in the repo."
+    Invoke-Nssm set $ServiceName Start SERVICE_AUTO_START
+
+    # Logs — NSSM redirects the child process's stdout/stderr (main.py's
+    # plain print() calls) to these files, with basic rotation so they don't
+    # grow forever.
+    Invoke-Nssm set $ServiceName AppStdout (Join-Path $LogsDir "service_stdout.log")
+    Invoke-Nssm set $ServiceName AppStderr (Join-Path $LogsDir "service_stderr.log")
+    Invoke-Nssm set $ServiceName AppRotateFiles 1
+    Invoke-Nssm set $ServiceName AppRotateOnline 1
+    Invoke-Nssm set $ServiceName AppRotateBytes 10485760   # 10 MB per file
+
+    # Stop behavior: try a Ctrl+C-style console signal first (main.py now
+    # catches this cleanly — see the run() docstring) and give it up to 60s,
+    # since asyncio.run()'s shutdown waits for any in-flight verify_run() to
+    # actually finish before returning. Window-message and thread-message
+    # stop methods don't apply to a console app with no window, so leave
+    # their (short) defaults — NSSM will fall through them quickly and, if
+    # the process still hasn't exited after all methods are tried, terminate
+    # it outright as a last resort.
+    Invoke-Nssm set $ServiceName AppStopMethodConsole 60000
+
+    # Crash recovery: if the process exits on its own (not via a deliberate
+    # `nssm stop`/`Stop-Service`), restart it after a short delay rather than
+    # immediately — avoids a tight crash loop if something is wrong at
+    # startup (e.g. the pipeline DB is unreachable).
+    Invoke-Nssm set $ServiceName AppExit Default Restart
+    Invoke-Nssm set $ServiceName AppRestartDelay 15000
+
+    Write-Host ""
+    Write-Host "Service '$ServiceName' configured."
+    Write-Host "  Logs:   $LogsDir"
+    Write-Host "  Review it in services.msc, or:"
+    Write-Host "    Get-Service $ServiceName"
+    Write-Host "    Stop-Service $ServiceName"
+
+    $configured = $true
+} finally {
+    # A service that was running before this script touched it must be
+    # running again afterwards — on success AND on failure. If a later
+    # `nssm set` throws after the stop above, skipping this would leave
+    # the always-on listener down and dispatched runs unprocessed (PR
+    # review, session 18). Best-effort: never mask the original error.
+    if ($wasRunning) {
+        try {
+            $svc = Get-Service -Name $ServiceName -ErrorAction Stop
+            if ($svc.Status -ne "Running") {
+                if (-not $configured) {
+                    Write-Warning "Configuration failed part-way; restoring the service's previous running state anyway."
+                }
+                Start-Service $ServiceName -ErrorAction Stop
+            }
+        } catch {
+            Write-Warning "Could not restore the running state of '$ServiceName': $_ - start it manually with: Start-Service $ServiceName"
+        }
+    }
 }
 
-# These `nssm set` calls run regardless of whether the service was just
-# installed or already existed, so re-running this script always leaves
-# the service in the same known configuration.
-Invoke-Nssm set $ServiceName AppDirectory $RepoRoot
-Invoke-Nssm set $ServiceName AppParameters $ServiceArgs
-Invoke-Nssm set $ServiceName DisplayName "Countable PCR Results Verification Service"
-Invoke-Nssm set $ServiceName Description "Always-on listener/orchestrator for the PCR regression verification service (ADR-015). See docs/adr in the repo."
-Invoke-Nssm set $ServiceName Start SERVICE_AUTO_START
-
-# Logs — NSSM redirects the child process's stdout/stderr (main.py's
-# plain print() calls) to these files, with basic rotation so they don't
-# grow forever.
-Invoke-Nssm set $ServiceName AppStdout (Join-Path $LogsDir "service_stdout.log")
-Invoke-Nssm set $ServiceName AppStderr (Join-Path $LogsDir "service_stderr.log")
-Invoke-Nssm set $ServiceName AppRotateFiles 1
-Invoke-Nssm set $ServiceName AppRotateOnline 1
-Invoke-Nssm set $ServiceName AppRotateBytes 10485760   # 10 MB per file
-
-# Stop behavior: try a Ctrl+C-style console signal first (main.py now
-# catches this cleanly — see the run() docstring) and give it up to 60s,
-# since asyncio.run()'s shutdown waits for any in-flight verify_run() to
-# actually finish before returning. Window-message and thread-message
-# stop methods don't apply to a console app with no window, so leave
-# their (short) defaults — NSSM will fall through them quickly and, if
-# the process still hasn't exited after all methods are tried, terminate
-# it outright as a last resort.
-Invoke-Nssm set $ServiceName AppStopMethodConsole 60000
-
-# Crash recovery: if the process exits on its own (not via a deliberate
-# `nssm stop`/`Stop-Service`), restart it after a short delay rather than
-# immediately — avoids a tight crash loop if something is wrong at
-# startup (e.g. the pipeline DB is unreachable).
-Invoke-Nssm set $ServiceName AppExit Default Restart
-Invoke-Nssm set $ServiceName AppRestartDelay 15000
-
-Write-Host ""
-Write-Host "Service '$ServiceName' configured."
-Write-Host "  Logs:   $LogsDir"
-Write-Host "  Review it in services.msc, or:"
-Write-Host "    Get-Service $ServiceName"
-Write-Host "    Stop-Service $ServiceName"
-
-# Restore whatever running state the service had before this script
-# touched it — a routine reconfigure of an already-running service must
-# not silently leave this always-on listener stopped, since dispatched
-# regression runs would then never be picked up (PR review, session 15).
-# -Start additionally forces a start for a fresh install / one that was
-# already stopped; it has no effect on a service that was already running
-# (that case always restarts regardless).
+# Success path. A service that was running was already restored above;
+# -Start additionally starts a fresh install / one that was already
+# stopped (never after a failed configuration — we only get here on
+# success).
 if ($wasRunning -or $Start) {
-    Write-Host "Starting service..."
-    Start-Service $ServiceName
+    if (-not $wasRunning) {
+        Write-Host "Starting service..."
+        Start-Service $ServiceName
+    }
     Start-Sleep -Seconds 2
     Get-Service $ServiceName
 } else {
